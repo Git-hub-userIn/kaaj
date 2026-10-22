@@ -4,7 +4,12 @@ import { cors } from 'hono/cors';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import { LocalDiskAssetStore } from './stores/asset-store.js';
-import { DocumentEnvelopeSchema, calculateWeight } from '@kaaj/doc-model';
+import {
+  DocumentEnvelopeSchema,
+  CreateEntrySchema,
+  UpdateEntrySchema,
+  calculateWeight,
+} from '@kaaj/doc-model';
 import { renderDocumentToPdf } from './services/pdf-service.js';
 import { CategoriesService } from './services/categories-service.js';
 import { authGuard } from './auth/guard.js';
@@ -55,11 +60,21 @@ app.get('/categories', async (c) => {
 
 app.get('/categories/:id', async (c) => {
   const id = c.req.param('id');
-  const result = await categoriesService.getCategory(id);
-  if (!result) {
+  const cat = await categoriesService.getCategory(id);
+  if (!cat) {
     return c.json({ error: 'Category not found' }, 404);
   }
-  return c.json(result);
+  return c.json(cat);
+});
+
+app.get('/categories/:id/entries', async (c) => {
+  const id = c.req.param('id');
+  const cat = await categoriesService.getCategory(id);
+  if (!cat) {
+    return c.json({ error: 'Category not found' }, 404);
+  }
+  const entries = await categoriesService.listEntriesForCategory(id);
+  return c.json(entries);
 });
 
 app.post('/categories', async (c) => {
@@ -105,6 +120,128 @@ app.post('/categories/:id/restore', async (c) => {
     return c.json({ error: 'Category not found or not deleted' }, 404);
   }
   return c.json(restored);
+});
+
+// Entry Endpoints (per spec 8.1 & Category Stack screen)
+app.get('/entries/:id', async (c) => {
+  const id = c.req.param('id');
+  const entry = await categoriesService.getEntry(id);
+
+  if (!entry) {
+    // Check fallback for spike in-memory store
+    const spike = entryStore.get(id);
+    if (spike) {
+      return c.json({
+        id,
+        version: spike.version,
+        weight: spike.weight,
+        doc: spike.doc,
+      });
+    }
+    return c.json({ error: 'Entry not found' }, 404);
+  }
+
+  return c.json(entry);
+});
+
+app.post('/entries', async (c) => {
+  try {
+    const raw = await c.req.json();
+    const parseResult = CreateEntrySchema.safeParse(raw);
+    if (!parseResult.success) {
+      return c.json({ error: 'Validation failed', details: parseResult.error.format() }, 422);
+    }
+
+    const { categoryId, title, color, pinned } = parseResult.data;
+    const cat = await categoriesService.getCategory(categoryId);
+    if (!cat) {
+      return c.json({ error: 'Category not found' }, 404);
+    }
+
+    const entry = await categoriesService.createEntry(categoryId, title, color, pinned);
+    return c.json(entry, 201);
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to create entry' }, 422);
+  }
+});
+
+app.patch('/entries/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const raw = await c.req.json();
+    const parseResult = UpdateEntrySchema.safeParse(raw);
+    if (!parseResult.success) {
+      return c.json({ error: 'Validation failed', details: parseResult.error.format() }, 422);
+    }
+
+    const updated = await categoriesService.updateEntry(id, parseResult.data);
+    if (!updated) {
+      return c.json({ error: 'Entry not found' }, 404);
+    }
+    return c.json(updated);
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to update entry' }, 422);
+  }
+});
+
+app.delete('/entries/:id', async (c) => {
+  const id = c.req.param('id');
+  const deleted = await categoriesService.deleteEntry(id);
+  if (!deleted) {
+    return c.json({ error: 'Entry not found' }, 404);
+  }
+  return c.json({ success: true, id });
+});
+
+app.post('/entries/:id/restore', async (c) => {
+  const id = c.req.param('id');
+  const restored = await categoriesService.restoreEntry(id);
+  if (!restored) {
+    return c.json({ error: 'Entry not found or not deleted' }, 404);
+  }
+  return c.json({ success: true, entry: restored });
+});
+
+app.put('/entries/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+
+  const parseResult = DocumentEnvelopeSchema.safeParse(body.doc);
+  if (!parseResult.success) {
+    return c.json({ error: 'Validation failed', details: parseResult.error.format() }, 422);
+  }
+
+  const doc = parseResult.data;
+
+  // If entry exists in categoriesService, persist it there
+  const existing = await categoriesService.getEntry(id);
+  if (existing) {
+    const result = await categoriesService.saveEntryDoc(id, doc);
+    return c.json({
+      id: result.entry.id,
+      version: result.entry.version,
+      weight: result.entry.weight,
+      saved: true,
+    });
+  }
+
+  // Fallback to spike in-memory store
+  const current = entryStore.get(id);
+  const nextVersion = (current?.version ?? 0) + 1;
+  const weightVal = calculateWeight(doc);
+
+  entryStore.set(id, {
+    doc,
+    version: nextVersion,
+    weight: weightVal,
+  });
+
+  return c.json({
+    id,
+    version: nextVersion,
+    weight: weightVal,
+    saved: true,
+  });
 });
 
 // Asset Endpoints
@@ -168,50 +305,6 @@ app.get('/assets/:id/thumb', async (c) => {
       'Content-Type': 'image/webp',
       'Cache-Control': 'public, max-age=31536000, immutable',
     },
-  });
-});
-
-app.get('/entries/:id', (c) => {
-  const id = c.req.param('id');
-  const entry = entryStore.get(id);
-
-  if (!entry) {
-    return c.json({ error: 'Entry not found' }, 404);
-  }
-
-  return c.json({
-    id,
-    version: entry.version,
-    weight: entry.weight,
-    doc: entry.doc,
-  });
-});
-
-app.put('/entries/:id', async (c) => {
-  const id = c.req.param('id');
-  const body = await c.req.json();
-
-  const parseResult = DocumentEnvelopeSchema.safeParse(body.doc);
-  if (!parseResult.success) {
-    return c.json({ error: 'Validation failed', details: parseResult.error.format() }, 422);
-  }
-
-  const doc = parseResult.data;
-  const current = entryStore.get(id);
-  const nextVersion = (current?.version ?? 0) + 1;
-  const weight = calculateWeight(doc);
-
-  entryStore.set(id, {
-    doc,
-    version: nextVersion,
-    weight,
-  });
-
-  return c.json({
-    id,
-    version: nextVersion,
-    weight,
-    saved: true,
   });
 });
 

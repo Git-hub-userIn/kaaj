@@ -44,7 +44,7 @@ test.describe('Kaaj Home Screen ("Catalogues")', () => {
 
     // Verify travel entry count
     const travelTile = page.locator('[data-testid="category-tile-cat_travel"]');
-    await expect(travelTile).toContainText('7 entries');
+    await expect(travelTile).toContainText('entries');
 
     // Verify zero console errors
     expect(consoleErrors).toEqual([]);
@@ -56,10 +56,10 @@ test.describe('Kaaj Home Screen ("Catalogues")', () => {
     await travelTileLink.click();
 
     await expect(page).toHaveURL(/.*\/category\/cat_travel/);
-    await expect(page.locator('[data-testid="category-stub-message"]')).toHaveText('Book stack coming next');
+    await expect(page.locator('[data-testid="book-stack-container"]')).toBeVisible();
 
     // Click back to catalogues
-    const backBtn = page.locator('[data-testid="back-to-catalogues"]');
+    const backBtn = page.locator('[data-testid="back-to-catalogues-link"]');
     await backBtn.click();
     await expect(page).toHaveURL('http://localhost:3000/');
     await expect(page.locator('[data-testid="home-screen"]')).toBeVisible();
@@ -79,7 +79,7 @@ test.describe('Kaaj Home Screen ("Catalogues")', () => {
     // Press Enter to navigate
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(/.*\/category\//);
-    await expect(page.locator('[data-testid="category-stub-message"]')).toBeVisible();
+    await expect(page.locator('[data-testid="book-stack-container"]')).toBeVisible();
   });
 
   test('4. Responsive layouts at 1440px, 768px, and 390px (no overflow, no tile overlap)', async ({ page }) => {

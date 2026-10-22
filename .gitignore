@@ -6,6 +6,7 @@ node_modules/
 dist/
 build/
 .cache/
+.vite/
 *.tsbuildinfo
 
 # Environment files

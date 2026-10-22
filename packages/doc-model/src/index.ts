@@ -111,6 +111,84 @@ export const CategoryLightRowSchema = CategorySchema.extend({
 export type Category = z.infer<typeof CategorySchema>;
 export type CategoryLightRow = z.infer<typeof CategoryLightRowSchema>;
 
+export const EntrySchema = z.object({
+  id: z.string().min(1),
+  categoryId: z.string().min(1),
+  title: z.string().min(1).max(200),
+  doc: DocumentEnvelopeSchema,
+  schemaVersion: z.number().int().default(1),
+  version: z.number().int().default(1),
+  weight: z.number().int().default(1),
+  sortOrder: z.number().int().default(0),
+  color: z.string().nullable().optional(),
+  pinned: z.boolean().default(false),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lastOpenedAt: z.string().nullable().optional(),
+  deletedAt: z.string().nullable().optional(),
+});
+
+export const EntryLightRowSchema = z.object({
+  id: z.string().min(1),
+  categoryId: z.string().min(1),
+  title: z.string().min(1).max(200),
+  weight: z.number().int().default(1),
+  sortOrder: z.number().int().default(0),
+  color: z.string().nullable().optional(),
+  pinned: z.boolean().default(false),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lastOpenedAt: z.string().nullable().optional(),
+  deletedAt: z.string().nullable().optional(),
+});
+
+export const CreateEntrySchema = z.object({
+  categoryId: z.string().min(1),
+  title: z.string().max(200).optional(),
+  color: z.string().optional(),
+  pinned: z.boolean().optional(),
+});
+
+export const UpdateEntrySchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  categoryId: z.string().min(1).optional(),
+  color: z.string().nullable().optional(),
+  pinned: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
+});
+
+export type Entry = z.infer<typeof EntrySchema>;
+export type EntryLightRow = z.infer<typeof EntryLightRowSchema>;
+export type CreateEntryInput = z.infer<typeof CreateEntrySchema>;
+export type UpdateEntryInput = z.infer<typeof UpdateEntrySchema>;
+
+/**
+ * Creates a valid empty DocumentEnvelope (schemaVersion 1).
+ */
+export function createEmptyDocument(title = 'Untitled'): DocumentEnvelope {
+  return {
+    schemaVersion: 1,
+    pages: [
+      {
+        id: `p_${crypto.randomUUID()}`,
+        size: {
+          width: VALIDATION_LIMITS.CANVAS_LOGICAL_WIDTH,
+          height: VALIDATION_LIMITS.CANVAS_LOGICAL_HEIGHT,
+        },
+        background: { type: 'solid', token: 'paper' },
+        body: {
+          format: 'kaaj-rich-text-v1',
+          content: [
+            { type: 'heading', level: 1, text: title },
+            { type: 'paragraph', text: '' },
+          ],
+        },
+        layers: [],
+      },
+    ],
+  };
+}
+
 /**
  * Pure weight function.
  * Calculates entry weight from character count, image count, and layer object count.
@@ -145,4 +223,25 @@ export function calculateWeight(doc: DocumentEnvelope): number {
   // Pure formula: 1 weight point per 100 characters + 10 points per image + 2 points per layer object
   const rawWeight = Math.floor(charCount / 100) + imageCount * 10 + objectCount * 2;
   return Math.max(1, rawWeight);
+}
+
+/**
+ * Alias for calculateWeight per spec ("the single weight() function in doc-model").
+ */
+export const weight = calculateWeight;
+
+/**
+ * Clamps entry weight into book spine height in pixels.
+ * Clamped strictly between minHeight (default 44px) and maxHeight (default 96px).
+ */
+export function calculateSpineHeight(
+  entryWeight: number,
+  minHeight = 44,
+  maxHeight = 96
+): number {
+  const safeWeight = Math.max(1, entryWeight);
+  // Linear scale up to weight 50, then clamped at maxHeight
+  const progress = Math.min(1, (safeWeight - 1) / 49);
+  const calculated = Math.round(minHeight + progress * (maxHeight - minHeight));
+  return Math.min(maxHeight, Math.max(minHeight, calculated));
 }

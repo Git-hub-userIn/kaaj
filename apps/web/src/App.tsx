@@ -6,9 +6,10 @@ import '@fontsource/kalam/400.css';
 import '@fontsource/kalam/700.css';
 
 import { HomeScreen } from './features/home/HomeScreen.js';
-import { CategoryStubScreen } from './features/category/CategoryStubScreen.js';
+import { CategoryStackScreen } from './features/category/CategoryStackScreen.js';
+import { EntryStubScreen } from './features/entry/EntryStubScreen.js';
 
-// Code-split heavy editor so home screen stays under 150 KB gzipped
+// Code-split heavy editor so home and category screens stay light
 const LazySpikeEditor = React.lazy(() =>
   import('./features/editor/SpikeEditor.js').then((m) => ({ default: m.SpikeEditor }))
 );
@@ -27,14 +28,27 @@ export const App: React.FC = () => {
 
   const navigate = (to: string) => {
     window.history.pushState({}, '', to);
-    setCurrentPath(to);
+    setCurrentPath(to.split('?')[0]);
   };
 
   // Route: /category/:id
   const categoryMatch = currentPath.match(/^\/category\/([^/]+)/);
   if (categoryMatch) {
     const categoryId = categoryMatch[1];
-    return <CategoryStubScreen categoryId={categoryId} onNavigateHome={() => navigate('/')} />;
+    return (
+      <CategoryStackScreen
+        categoryId={categoryId}
+        onNavigateHome={() => navigate('/')}
+        onNavigateToEntry={(entryId) => navigate(`/entry/${entryId}`)}
+      />
+    );
+  }
+
+  // Route: /entry/:id
+  const entryMatch = currentPath.match(/^\/entry\/([^/]+)/);
+  if (entryMatch) {
+    const entryId = entryMatch[1];
+    return <EntryStubScreen entryId={entryId} onNavigateBack={() => window.history.back()} />;
   }
 
   // Route: /spike or /editor
