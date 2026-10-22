@@ -7,8 +7,10 @@ import type {
   DocumentEnvelope,
   Entry,
   EntryLightRow,
+  SpineStyle,
+  EntryStats,
 } from '@kaaj/doc-model';
-import { calculateWeight, createEmptyDocument } from '@kaaj/doc-model';
+import { calculateWeight, calculateEntryStats, createEmptyDocument } from '@kaaj/doc-model';
 import { SEED_COVERS_MANIFEST } from '@kaaj/design';
 import type { LocalDiskAssetStore } from '../stores/asset-store.js';
 
@@ -19,6 +21,8 @@ export interface EntryRecord {
   sortOrder: number;
   color?: string | null;
   pinned: boolean;
+  spine?: SpineStyle | null;
+  stats?: EntryStats;
   weight: number;
   version: number;
   doc: DocumentEnvelope;
@@ -32,9 +36,11 @@ interface SeedEntrySpec {
   title: string;
   paragraphs: string[];
   imageCount?: number;
+  pageCount?: number;
   color?: string;
   pinned?: boolean;
   dateOffsetDays?: number;
+  spine?: SpineStyle;
 }
 
 interface SeedCategorySpec {
@@ -45,6 +51,457 @@ interface SeedCategorySpec {
   sortOrder: number;
   entries: SeedEntrySpec[];
 }
+
+const IDEAS_TITLES_AND_DESCS: Array<{ title: string; text: string; pages?: number; images?: number; color: string; spine?: SpineStyle; pinned?: boolean }> = [
+  {
+    title: 'Field Manifesto for Slow Software',
+    text: 'Software should age like paper and leather. It should reward contemplation rather than anxious vigilance. Eliminate infinite feeds, notification badges, and aggressive engagement metrics. Build tools that feel like physical objects on a sturdy oak table.',
+    pages: 3,
+    images: 2,
+    color: 'terracotta',
+    pinned: true,
+    spine: { texture: 'cloth', color: '#8c3a1e', font: 'newsreader', finish: 'gold-foil', bands: 'three' },
+  },
+  {
+    title: 'Handmade Visual Archive Concept',
+    text: 'A personal archive where pages have weight, thickness, and tactile friction. Digital tools inspired by zine culture, Japanese stationery, and early bookbinding guilds.',
+    pages: 2,
+    images: 1,
+    color: 'moss',
+    pinned: true,
+    spine: { texture: 'leather', color: '#344c39', font: 'playfair-display', finish: 'gold-foil', bands: 'two' },
+  },
+  {
+    title: 'Paper Texture Generation via WebGL',
+    text: 'Procedural fiber distribution, rag paper grain, deckle edges, and slight surface height variation simulated with bump mapping in fragment shaders.',
+    pages: 1,
+    images: 1,
+    color: 'slate',
+    spine: { texture: 'worn', color: '#2e414c', font: 'special-elite', finish: 'silver-foil', bands: 'two' },
+  },
+  {
+    title: 'The Epistemology of Personal Scrapbooks',
+    text: 'Collecting fragments is not hoarding; it is an act of sense-making. The juxtaposition of a train ticket next to a pressed fern creates meaning that linear narrative cannot convey.',
+    pages: 4,
+    images: 3,
+    color: 'amber',
+    spine: { texture: 'linen', color: '#7a4813', font: 'newsreader', finish: 'gold-foil', bands: 'none' },
+  },
+  {
+    title: 'Tactile Interfaces for Touchscreens',
+    text: 'Haptic feedback micro-pulses when turning digital parchment pages. Auditory cues sampled from dry linen paper and bone folding knives.',
+    pages: 2,
+    images: 0,
+    color: 'indigo',
+    spine: { texture: 'cloth', color: '#263449', font: 'oswald', finish: 'silver-foil', bands: 'two' },
+  },
+  {
+    title: 'Zine Culture and Indie Web Protocols',
+    text: 'Reclaiming personal agency on the internet through small-scale publishing, federated feeds, and hand-crafted HTML documents.',
+    pages: 1,
+    images: 2,
+    color: 'linen',
+    spine: { texture: 'kraft', color: '#ede6d8', font: 'special-elite', finish: 'black-ink', bands: 'none' },
+  },
+  {
+    title: 'Typography of 19th Century Ledgers',
+    text: 'Study of iron-gall ink penmanship, red ledger ruling lines, hand-stamped pagination, and marbled endpapers in apothecary registers.',
+    pages: 3,
+    images: 2,
+    color: 'charcoal',
+    spine: { texture: 'leather', color: '#2c2825', font: 'newsreader', finish: 'gold-foil', bands: 'three' },
+  },
+  {
+    title: 'A Taxonomy of Marginalia and Scraps',
+    text: 'Types of annotations: corrections, exclamation marks, question loops, cross-references, and small doodles drawn while waiting for rain to pass.',
+    pages: 2,
+    images: 1,
+    color: 'clay',
+    spine: { texture: 'worn', color: '#9e563a', font: 'kalam', finish: 'white-ink', bands: 'two' },
+  },
+  {
+    title: 'Offline-First Local Storage Invariants',
+    text: 'Every mutation must append to an immutable local journal before network dispatch. Sync conflicts resolved deterministically via CRDTs.',
+    pages: 2,
+    images: 0,
+    color: 'slate',
+    spine: { texture: 'cloth', color: '#2e414c', font: 'oswald', finish: 'silver-foil', bands: 'two' },
+  },
+  {
+    title: 'Color Harmonies in Natural Pigments',
+    text: 'Raw sienna, burnt umber, lapis lazuli, malachite green, and madder root red. The organic subtlety of mineral watercolours on cotton rag.',
+    pages: 3,
+    images: 3,
+    color: 'plum',
+    spine: { texture: 'marbled', color: '#4e2d3f', font: 'playfair-display', finish: 'gold-foil', bands: 'two' },
+  },
+  {
+    title: 'Drafting Isometric Floorplans by Hand',
+    text: '30-degree grid lines, mechanical 2H pencils, adjustable triangles, and erasing shields. The rhythm of constructing three dimensions on two.',
+    pages: 1,
+    images: 1,
+    color: 'terracotta',
+  },
+  {
+    title: 'The Lost Art of Commonplace Books',
+    text: 'From Erasmus and John Locke to Virginia Woolf: keeping an index of citations, philosophical excerpts, and daily observations.',
+    pages: 2,
+    images: 0,
+    color: 'moss',
+  },
+  {
+    title: 'Wax Seals and Thread Stitch Bindings',
+    text: 'Coptic stitch across exposed spine signatures. Flexible opening that lies perfectly flat on reading desks without cracking.',
+    pages: 2,
+    images: 2,
+    color: 'amber',
+  },
+  {
+    title: 'Japanese Stationery Tools & Ink Stones',
+    text: 'Grinding sumi ink sticks against wet slate. The meditative preparation before the first brush stroke touches the mulberry washi.',
+    pages: 1,
+    images: 1,
+    color: 'charcoal',
+  },
+  {
+    title: 'Acoustic Ecology and Sound Landscapes',
+    text: 'Recording dawn choruses in cedar groves. Sound pressure variations across seasonal migrations and water runoff channels.',
+    pages: 3,
+    images: 0,
+    color: 'indigo',
+  },
+  {
+    title: 'Preserving Digital Artifacts Across Decades',
+    text: 'File format decay, proprietary lock-in, and the virtue of plain text documents paired with portable vector graphics.',
+    pages: 2,
+    images: 0,
+    color: 'paper',
+  },
+  {
+    title: 'The Geometry of Open Layouts',
+    text: 'Asymmetric grid systems inspired by Jan Tschichold and Swiss poster typography. Balancing whitespace with dense narrative anchors.',
+    pages: 2,
+    images: 1,
+    color: 'linen',
+  },
+  {
+    title: 'Book Spine Embossing Techniques',
+    text: 'Blind stamping with heated brass dies to press title letterforms into calico cloth, followed by gold leaf foil application.',
+    pages: 1,
+    images: 1,
+    color: 'clay',
+  },
+  {
+    title: 'Architectural Drafting Principles',
+    text: 'Line weight hierarchy: profile lines at 0.7mm, contour lines at 0.5mm, dimension lines at 0.25mm. Clarity through discipline.',
+    pages: 2,
+    images: 1,
+    color: 'slate',
+  },
+  {
+    title: 'Designing for Serendipitous Retrieval',
+    text: 'Flipping through physical albums allows the eye to catch unexpected connections. How can digital interfaces preserve peripheral vision?',
+    pages: 2,
+    images: 0,
+    color: 'moss',
+  },
+  {
+    title: 'Herbarium Mounting Protocols',
+    text: 'Archival glue drops on stems, linen gummed tape across petiole bases, typed species identification labels on lower right quadrant.',
+    pages: 2,
+    images: 2,
+    color: 'moss',
+  },
+  {
+    title: 'Night Studies in Nocturnal Flora',
+    text: 'Moonflowers and evening primrose opening under twilight. Scent dissipation patterns guided by moth pollination vectors.',
+    pages: 1,
+    images: 1,
+    color: 'indigo',
+  },
+  {
+    title: 'Cabinet of Curiosities Layout',
+    text: 'Glass specimen jars, brass drawer pulls, velvet display linings, and partitioned cedar trays for mineral crystals.',
+    pages: 3,
+    images: 2,
+    color: 'amber',
+  },
+  {
+    title: 'The Architecture of Japanese Teahouses',
+    text: 'Shoji screens filtering northern daylight, cedar rafters left unvarnished, and tatami floor mat proportions defining movement.',
+    pages: 2,
+    images: 1,
+    color: 'linen',
+  },
+  {
+    title: 'Handmade Marbled Endpapers Workshop',
+    text: 'Carrageenan moss bath sizing, ox gall dispersant, comb patterns, and single-motion paper lifting onto drying racks.',
+    pages: 2,
+    images: 2,
+    color: 'plum',
+  },
+  {
+    title: 'The Geometry of Wind Turbines',
+    text: 'Aerodynamic blade twist, composite carbon spars, and silent rotation curves cutting through coastal gusts.',
+    pages: 1,
+    images: 0,
+    color: 'slate',
+  },
+  {
+    title: 'Fountain Pen Nib Grinds and Ink Flow',
+    text: 'Architect grind versus cursive italic. Surface tension variations across dye-based versus pigment-based fountain pen inks.',
+    pages: 2,
+    images: 1,
+    color: 'terracotta',
+  },
+  {
+    title: 'Ancient Cartography of Northern Coasts',
+    text: 'Sea monster vignettes in uncharted waters, rhumb lines radiating from compass roses, and hand-tinted coastlines.',
+    pages: 3,
+    images: 2,
+    color: 'charcoal',
+  },
+  {
+    title: 'Principles of Wood Joinery',
+    text: 'Through mortise and tenon, stopped sliding dovetails, and drawbore pins tightened without synthetic adhesives.',
+    pages: 2,
+    images: 1,
+    color: 'clay',
+  },
+  {
+    title: 'Observations on Mountain Fog Formations',
+    text: 'Orographic lift carrying moist maritime air over pine ridges, condensing into dense silver cloud blankets before noon.',
+    pages: 1,
+    images: 1,
+    color: 'paper',
+  },
+  {
+    title: 'Microbial Ecology of Forest Soil',
+    text: 'Mycelial networks threading through decaying hemlock needles, redistributing phosphorus and carbon across tree canopies.',
+    pages: 2,
+    images: 1,
+    color: 'moss',
+  },
+  {
+    title: 'The Aesthetics of Industrial Ruins',
+    text: 'Oxidized iron trusses overtaken by creeping ivy. Concrete silos reflecting low golden hour sunlight across empty railway sidings.',
+    pages: 2,
+    images: 2,
+    color: 'slate',
+  },
+  {
+    title: 'Typographic Kerning and Optical Spacing',
+    text: 'The negative space between uppercase T and lowercase o. Rhythm, optical density, and balance across continuous body prose.',
+    pages: 1,
+    images: 0,
+    color: 'charcoal',
+  },
+  {
+    title: 'Hand-Cut Linoleum Printing Blocks',
+    text: 'V-gouges and U-gouges carving into battleship linoleum. Thick oil-based block printing ink rolled with hard brayers.',
+    pages: 2,
+    images: 2,
+    color: 'terracotta',
+  },
+  {
+    title: 'Sound Design with Analog Modular Synthesizers',
+    text: 'Voltage-controlled oscillators tuned to fifths, resonant low-pass ladder filters, and slow triangular low-frequency modulation.',
+    pages: 2,
+    images: 1,
+    color: 'indigo',
+  },
+  {
+    title: 'Studies in Old Brick Masonry',
+    text: 'Flemish bond versus English bond. Lime mortar flexibility permitting centuries of seasonal thermal expansion without cracking.',
+    pages: 2,
+    images: 1,
+    color: 'clay',
+  },
+  {
+    title: 'Field Notes from High Alpine Lakes',
+    text: 'Granite cirques cupping turquoise meltwater. Dwarf willow shrubs clinging to scree slopes above timberline.',
+    pages: 3,
+    images: 2,
+    color: 'amber',
+  },
+  {
+    title: 'Solar Geometry and Sundial Calculations',
+    text: 'Gnomon angle equal to local latitude, equation of time correction curves, and hour lines etched into slate slabs.',
+    pages: 1,
+    images: 0,
+    color: 'linen',
+  },
+  {
+    title: 'Fermentation Science and Micro-Koji Cultures',
+    text: 'Aspergillus oryzae inoculated onto steamed barley. Temperature curves maintained at 36 degrees for forty-eight hours.',
+    pages: 2,
+    images: 1,
+    color: 'amber',
+  },
+  {
+    title: 'The Philosophy of Solitary Walking',
+    text: 'Rousseau, Thoreau, and Basho: walking as an engine for unhurried thought, rhythmically synchronizing breath and observation.',
+    pages: 3,
+    images: 0,
+    color: 'moss',
+  },
+  {
+    title: 'Preserving Botanical Pressings in Archival Vellum',
+    text: 'Pure vellum sleeves protecting fragile delicate petals from ambient humidity and ultraviolet degradation.',
+    pages: 1,
+    images: 1,
+    color: 'paper',
+  },
+  {
+    title: 'Ceramic Glazes and Wood-Fired Kiln Atmospheres',
+    text: 'Ash deposits melting into shino glazes during three-day anagama firings, creating natural crackle textures and carbon trap blush.',
+    pages: 2,
+    images: 2,
+    color: 'clay',
+  },
+  {
+    title: 'Bicycle Frame Geometry and Lugged Steel Tubing',
+    text: 'Reynolds 531 butted steel tubes joined with investment-cast lugs and silver brazing wire at 650 degrees Celsius.',
+    pages: 2,
+    images: 1,
+    color: 'slate',
+  },
+  {
+    title: 'The Craft of Custom Leather Watch Straps',
+    text: 'Saddle stitching with waxed French linen thread, burnished edges with gum tragacanth, and natural veg-tan patina development.',
+    pages: 1,
+    images: 1,
+    color: 'amber',
+  },
+  {
+    title: 'Astronomy from Remote Desert Plateaus',
+    text: 'Zodiacal light visible before dawn, pin-sharp stars down to tenth magnitude, and long-exposure tracking of the Andromeda galaxy.',
+    pages: 3,
+    images: 2,
+    color: 'indigo',
+  },
+  {
+    title: 'Traditional Wool Weaving and Loom Mechanics',
+    text: 'Four-shaft floor loom setup, warping mill calculations, and shuttle rhythm weaving herringbone twill patterns.',
+    pages: 2,
+    images: 1,
+    color: 'linen',
+  },
+  {
+    title: 'Old Bookstore Cataloguing Methods',
+    text: 'Card catalog drawers arranged by subject, author surname, and edition rarity. The smell of cedar cabinets and decaying pulp.',
+    pages: 2,
+    images: 0,
+    color: 'charcoal',
+  },
+  {
+    title: 'The Chemistry of Watercolors and Gum Arabic',
+    text: 'Kordofan gum arabic binder, vegetable glycerin plasticizer, and natural honey adding moisture retention to pan colors.',
+    pages: 2,
+    images: 2,
+    color: 'plum',
+  },
+  {
+    title: 'Coastal Lighthouses and Fog Signal Protocols',
+    text: 'Fresnel lens rotation clockworks driven by descending iron weights. Compressed air diaphone blasts echoing through sea haze.',
+    pages: 2,
+    images: 1,
+    color: 'slate',
+  },
+  {
+    title: 'A Study in Hand-Carved Wooden Spoons',
+    text: 'Green cherry wood split with a froe, carved with a straight sloyd knife and curved hook knife, finished with raw walnut oil.',
+    pages: 1,
+    images: 1,
+    color: 'clay',
+  },
+  {
+    title: 'Wild Mushroom Foraging in Mixed Conifer Woods',
+    text: 'Chanterelles nestled under spruce duff, king boletes pushing through pine needles, and spore print records on black paper.',
+    pages: 2,
+    images: 2,
+    color: 'moss',
+  },
+  {
+    title: 'Tasting Notes on Single-Origin Darjeeling First Flush',
+    text: 'Muscatel notes, fresh green almond finish, and bright pale amber liquor steeped for three minutes at 85 degrees Celsius.',
+    pages: 1,
+    images: 0,
+    color: 'amber',
+  },
+  {
+    title: 'The Poetry of Railway Timetables',
+    text: 'Connecting spurs, seasonal sleeper cars, single-track passing loops, and whistle stops marked only with a lowercase cross.',
+    pages: 2,
+    images: 0,
+    color: 'charcoal',
+  },
+  {
+    title: 'Restoring Vintage Mechanical Wristwatches',
+    text: 'Pegwood cleaning balance jewels, applying micro-droplets of Moebius synthetic oil with fine needle oilers.',
+    pages: 2,
+    images: 2,
+    color: 'indigo',
+  },
+  {
+    title: 'The Morphology of Coastal Seaweeds',
+    text: 'Bladder wrack air vesicles, kelp holdfast anchors adhering to granite boulders, and pressed specimens on watercolour cards.',
+    pages: 1,
+    images: 1,
+    color: 'moss',
+  },
+  {
+    title: 'Dry Stone Wall Construction Techniques',
+    text: 'Hearting stones packed tightly between batter faces, through-stones spanning the wall thickness for lateral structural tie.',
+    pages: 2,
+    images: 1,
+    color: 'slate',
+  },
+  {
+    title: 'Calligraphy of Gothic Blackletter Textura',
+    text: 'Broad edge dip pen held at forty-five degrees, consistent stroke spacing equal to nib width, and vermilion capital flourishes.',
+    pages: 2,
+    images: 2,
+    color: 'terracotta',
+  },
+  {
+    title: 'Early Glass Plate Negative Photography',
+    text: 'Collodion poured onto clean glass plates, sensitized in silver nitrate bath, exposed wet, and developed under amber lanterns.',
+    pages: 3,
+    images: 2,
+    color: 'charcoal',
+  },
+  {
+    title: 'Designing Quiet Spaces in Modern Cities',
+    text: 'Acoustic baffle courtyard walls, trickling stone fountains masking traffic roar, and deciduous leaf shade cooling brick walkways.',
+    pages: 2,
+    images: 1,
+    color: 'linen',
+  },
+  {
+    title: 'An Inventory of Personal Writing Desks',
+    text: 'Slanted oak lap desks, brass-cornered campaign boxes, rolled stationery compartments, and secret spring-loaded document drawers.',
+    pages: 2,
+    images: 1,
+    color: 'amber',
+  },
+];
+
+// Generate 60 entries for ideas
+const SEED_IDEAS_ENTRIES: SeedEntrySpec[] = IDEAS_TITLES_AND_DESCS.map((item, idx) => {
+  // Distribute over 180 days (6 months)
+  const offsetDays = Math.round((idx / 60) * 175);
+  return {
+    title: item.title,
+    paragraphs: [item.text, 'Additional field observations and contemplative notes collected during quiet morning sessions at the study desk.'],
+    pageCount: item.pages || 1,
+    imageCount: item.images || 0,
+    color: item.color,
+    pinned: item.pinned || false,
+    dateOffsetDays: offsetDays,
+    spine: item.spine,
+  };
+});
 
 const SEED_CATEGORIES_DATA: SeedCategorySpec[] = [
   {
@@ -129,7 +586,7 @@ const SEED_CATEGORIES_DATA: SeedCategorySpec[] = [
         title: 'Sourdough Crumb Notes',
         paragraphs: [
           '80% hydration flour blend using stone-ground heritage wheat. Bulk fermentation extended to 5 hours at 24 degrees Celsius with three sets of coil folds.',
-          'Bake in cast iron dutch oven at 240C with two ice cubes dropped behind parchment. Blistered blistered crust with deep mahogany caramelisation.',
+          'Bake in cast iron dutch oven at 240C with two ice cubes dropped behind parchment. Blistered crust with deep mahogany caramelisation.',
         ],
         color: 'amber',
         dateOffsetDays: 24,
@@ -148,32 +605,31 @@ const SEED_CATEGORIES_DATA: SeedCategorySpec[] = [
           'Crush three whole green cardamom pods with a coin of ginger and one clove. Simmer in whole milk with loose Assam tea until golden tan.',
         ],
         color: 'clay',
-        dateOffsetDays: 14,
+        dateOffsetDays: 15,
       },
       {
-        title: 'Handmade Tagliatelle',
+        title: 'Handmade Soba Noodles',
         paragraphs: [
-          'Semolina well on wooden pasta board. Ten egg yolks beaten gently with a fork and drawn slowly outward until a supple dough forms.',
-          'Roll paper-thin through the brass hand-crank machine, dusted with extra semolina to prevent sticking.',
+          'Buckwheat flour kneaded with icy well water on wide cypress rolling board. Cut into uniform ribbons with a heavy soba kiri knife.',
         ],
         imageCount: 1,
-        color: 'linen',
-        dateOffsetDays: 9,
+        color: 'slate',
+        dateOffsetDays: 10,
       },
       {
-        title: 'Spiced Plum Galette',
+        title: 'Pickled Chanterelles & Thyme',
         paragraphs: [
-          'Flaky butter crust chilled overnight. Tart damson plums tossed in muscovado sugar and cracked star anise, folded casually at the rim.',
-        ],
-        color: 'plum',
-        dateOffsetDays: 4,
-      },
-      {
-        title: 'Fermentation Timeline',
-        paragraphs: [
-          'Day 1: brine salt at 2.5%. Day 3: active bubble development. Day 7: sour lactic aroma emerges with crisp crunch retained.',
+          'White wine vinegar, mustard seed, and fresh thyme sprigs poured hot over clean golden caps in glass preserving jars.',
         ],
         color: 'moss',
+        dateOffsetDays: 5,
+      },
+      {
+        title: 'Cast Iron Skillet Cornbread',
+        paragraphs: [
+          'Stone-ground yellow cornmeal sizzled in smoking bacon lard, baked until top crackles with crisp golden perimeter.',
+        ],
+        color: 'linen',
         dateOffsetDays: 1,
       },
     ],
@@ -181,21 +637,15 @@ const SEED_CATEGORIES_DATA: SeedCategorySpec[] = [
   {
     key: 'sketches',
     title: 'Sketches',
-    description: 'Charcoal studies, ink wash diagrams, and loose lines',
-    color: 'slate',
+    description: 'Charcoal studies, ink splatters, anatomy, and streetscapes',
+    color: 'charcoal',
     sortOrder: 2,
     entries: [
       {
-        title: 'Morning Subway Figures',
-        paragraphs: ['Commuters in winter coats caught in three-second gestural strokes with 4B compressed graphite.'],
-        color: 'charcoal',
-        dateOffsetDays: 28,
-      },
-      {
-        title: 'Botanical Ink Studies',
-        paragraphs: ['Japanese sumi ink and water wash on cold press watercolour paper. Capturing veining on dry hydrangea bracts.'],
+        title: 'Old Town Fountain Vignette',
+        paragraphs: ['Heavy wash of Payne grey watercolour over waterproof sepia ink lines. The gargoyle spout weathered by three centuries.'],
         imageCount: 1,
-        color: 'moss',
+        color: 'charcoal',
         dateOffsetDays: 22,
       },
       {
@@ -328,142 +778,7 @@ const SEED_CATEGORIES_DATA: SeedCategorySpec[] = [
     description: 'Fragments, architectural scraps, essay seeds, and questions',
     color: 'terracotta',
     sortOrder: 5,
-    entries: [
-      {
-        title: 'Field Manifesto for Slow Software',
-        paragraphs: [
-          'Software should age like paper and leather. It should reward contemplation rather than anxious vigilance.',
-          'Eliminate infinite feeds, notification badges, and aggressive engagement metrics. Build tools that feel like physical objects on a sturdy oak table.',
-        ],
-        imageCount: 1,
-        color: 'terracotta',
-        pinned: true,
-        dateOffsetDays: 45,
-      },
-      {
-        title: 'Handmade Visual Archive Concept',
-        paragraphs: ['A personal archive where pages have weight, thickness, and tactile friction. Digital tools inspired by zine culture.'],
-        color: 'amber',
-        dateOffsetDays: 40,
-      },
-      {
-        title: 'Paper Texture Generation Ideas',
-        paragraphs: ['Perlin noise combined with SVG turbulence filters to simulate laid paper fibers without multi-megabyte image assets.'],
-        color: 'paper',
-        dateOffsetDays: 38,
-      },
-      {
-        title: 'Tactile Book Spine Calculations',
-        paragraphs: ['Computing spine thickness directly from character density, image weights, and layer compositions.'],
-        imageCount: 1,
-        color: 'moss',
-        dateOffsetDays: 35,
-      },
-      {
-        title: 'Micro-Interactions Without Framer',
-        paragraphs: ['Pure CSS transforms with cubic-bezier easing to keep bundle footprint under 60 KB.'],
-        color: 'slate',
-        dateOffsetDays: 32,
-      },
-      {
-        title: 'Zine Layout Structures',
-        paragraphs: [
-          'Folding an A4 sheet into an eight-page booklet with a single horizontal slit in the center.',
-          'Page pacing: dense text spreads alternating with bold graphic collages and margins for penciled notes.',
-        ],
-        imageCount: 1,
-        color: 'linen',
-        dateOffsetDays: 29,
-      },
-      {
-        title: 'Offline First Sync Thoughts',
-        paragraphs: ['Fencing tokens, version clocks, and local drafts in IndexedDB to survive network interruptions.'],
-        color: 'indigo',
-        dateOffsetDays: 27,
-      },
-      {
-        title: 'Editorial Mood Board Ratios',
-        paragraphs: ['Golden ratio and Rule of Thirds applied to asymmetric collage grids.'],
-        color: 'clay',
-        dateOffsetDays: 25,
-      },
-      {
-        title: 'Color Harmonies from Clay Pottery',
-        paragraphs: ['Earthy pigments extracted from terracotta, river silt, charcoal, and ochre clay.'],
-        color: 'terracotta',
-        dateOffsetDays: 22,
-      },
-      {
-        title: 'Minimalist Writing Typography',
-        paragraphs: ['Newsreader serif paired with warm monospaced footnotes and Kalam handwritten margin notes.'],
-        color: 'charcoal',
-        dateOffsetDays: 20,
-      },
-      {
-        title: 'Deckle Edge SVG Filter Formulas',
-        paragraphs: ['Using feTurbulence and feDisplacementMap to fray the geometric borders of digital paper sheets.'],
-        color: 'paper',
-        dateOffsetDays: 18,
-      },
-      {
-        title: 'Washi Tape Opacity Experiments',
-        paragraphs: ['Semi-translucent tape strips overlapping card borders with slight rotation offsets.'],
-        color: 'linen',
-        dateOffsetDays: 16,
-      },
-      {
-        title: 'Acoustic Keyboard Soundscapes',
-        paragraphs: ['Mechanical switches with lubricated stem housings emitting soft thuds resembling rain on cedar shingles.'],
-        color: 'slate',
-        dateOffsetDays: 14,
-      },
-      {
-        title: 'Pocket Notebook Binding Stitches',
-        paragraphs: [
-          'Coptic stitch binding allowing notebooks to lie completely flat on any work surface.',
-          'Waxed linen thread in crimson pulled tight through five pierced stations along the spine fold.',
-        ],
-        imageCount: 1,
-        color: 'amber',
-        dateOffsetDays: 12,
-      },
-      {
-        title: 'Japanese Joinery Metaphors',
-        paragraphs: ['Kanawa Tsugi scarf joints where modular components lock together without external fasteners.'],
-        color: 'moss',
-        dateOffsetDays: 10,
-      },
-      {
-        title: 'Fountain Pen Ink Viscosity Logs',
-        paragraphs: ['Testing iron gall ink flow against 100gsm cotton rag versus 52gsm Tomoe River paper.'],
-        color: 'indigo',
-        dateOffsetDays: 8,
-      },
-      {
-        title: 'Ceramic Glaze Palette Studies',
-        paragraphs: ['Celadon green, tenmoku iron brown, and shino white with crawling textures in reduction firing.'],
-        color: 'clay',
-        dateOffsetDays: 6,
-      },
-      {
-        title: 'Collage Negative Space Rules',
-        paragraphs: ['Leaving room for the table surface to breathe between overlapping scrapbook fragments.'],
-        color: 'paper',
-        dateOffsetDays: 4,
-      },
-      {
-        title: 'Book Spine Embossing Techniques',
-        paragraphs: ['Blind stamping with heated brass dies to press title letterforms into book cloth.'],
-        color: 'plum',
-        dateOffsetDays: 2,
-      },
-      {
-        title: 'Architectural Drafting Principles',
-        paragraphs: ['Line weight hierarchy: profile lines at 0.7mm, contour lines at 0.5mm, dimension lines at 0.25mm.'],
-        color: 'charcoal',
-        dateOffsetDays: 0,
-      },
-    ],
+    entries: SEED_IDEAS_ENTRIES,
   },
   {
     key: 'memories',
@@ -532,11 +847,11 @@ export class CategoriesService {
       await this.seed();
     }
 
-    // If categories empty or ideas category has fewer than 20 entries, reseed
+    // If categories empty or ideas category has fewer than 60 entries, reseed
     const ideasEntries = Array.from(this.entries.values()).filter(
       (e) => e.categoryId === 'cat_ideas' && !e.deletedAt
     );
-    if (this.categories.size === 0 || ideasEntries.length < 20) {
+    if (this.categories.size === 0 || ideasEntries.length < 60) {
       await this.seed();
     }
 
@@ -575,7 +890,7 @@ export class CategoriesService {
     for (const seedCat of SEED_CATEGORIES_DATA) {
       const catId = `cat_${seedCat.key}`;
       const coverAssetId = coverAssetMap.get(seedCat.key);
-      const catCreatedAt = new Date(nowMs - 60 * 24 * 60 * 60 * 1000).toISOString();
+      const catCreatedAt = new Date(nowMs - 180 * 24 * 60 * 60 * 1000).toISOString();
 
       const category: Category = {
         id: catId,
@@ -621,23 +936,28 @@ export class CategoriesService {
           }
         }
 
+        const numPages = Math.max(1, entrySpec.pageCount ?? 1);
+        const pages = [];
+        for (let pIdx = 0; pIdx < numPages; pIdx++) {
+          pages.push({
+            id: `p_${entryId}_${pIdx + 1}`,
+            size: { width: 1200, height: 1600 },
+            background: { type: 'solid' as const, token: 'paper' },
+            body: {
+              format: 'kaaj-rich-text-v1' as const,
+              content: pIdx === 0 ? bodyContent : [{ type: 'paragraph', text: 'Continued reflections and extended journal notes.' }],
+            },
+            layers: [],
+          });
+        }
+
         const doc: DocumentEnvelope = {
           schemaVersion: 1,
-          pages: [
-            {
-              id: `p_${entryId}_1`,
-              size: { width: 1200, height: 1600 },
-              background: { type: 'solid', token: 'paper' },
-              body: {
-                format: 'kaaj-rich-text-v1',
-                content: bodyContent,
-              },
-              layers: [],
-            },
-          ],
+          pages,
         };
 
         const calculatedWeight = calculateWeight(doc);
+        const stats = calculateEntryStats(doc);
 
         const entry: EntryRecord = {
           id: entryId,
@@ -646,6 +966,8 @@ export class CategoriesService {
           sortOrder: entryIndex++,
           color: entrySpec.color || seedCat.color,
           pinned: entrySpec.pinned ?? false,
+          spine: entrySpec.spine || null,
+          stats,
           weight: calculatedWeight,
           version: 1,
           doc,
@@ -763,6 +1085,7 @@ export class CategoriesService {
 
   /**
    * List light rows for entries in a category (never load doc).
+   * Caps at 500 rows per spec.
    */
   async listEntriesForCategory(categoryId: string): Promise<EntryLightRow[]> {
     await this.init();
@@ -778,6 +1101,8 @@ export class CategoriesService {
           sortOrder: e.sortOrder,
           color: e.color ?? null,
           pinned: e.pinned,
+          spine: e.spine ?? null,
+          stats: e.stats ?? calculateEntryStats(e.doc),
           createdAt: e.createdAt,
           updatedAt: e.updatedAt,
           lastOpenedAt: e.lastOpenedAt ?? null,
@@ -786,7 +1111,8 @@ export class CategoriesService {
       }
     }
 
-    return rows;
+    // Cap at 500 entries per spec
+    return rows.slice(0, 500);
   }
 
   /**
@@ -806,7 +1132,8 @@ export class CategoriesService {
     categoryId: string,
     title = 'Untitled',
     color?: string,
-    pinned = false
+    pinned = false,
+    spine?: SpineStyle
   ): Promise<EntryRecord> {
     await this.init();
     const now = new Date().toISOString();
@@ -815,6 +1142,7 @@ export class CategoriesService {
 
     const doc = createEmptyDocument(cleanTitle);
     const weightVal = calculateWeight(doc);
+    const stats = calculateEntryStats(doc);
 
     // Count existing unpinned entries for sortOrder
     const existing = Array.from(this.entries.values()).filter(
@@ -828,6 +1156,8 @@ export class CategoriesService {
       sortOrder: existing.length,
       color: color || null,
       pinned,
+      spine: spine || null,
+      stats,
       weight: weightVal,
       version: 1,
       doc,
@@ -843,7 +1173,7 @@ export class CategoriesService {
   }
 
   /**
-   * Update entry metadata (title, categoryId, color, pinned, sortOrder).
+   * Update entry metadata (title, categoryId, color, pinned, sortOrder, spine).
    */
   async updateEntry(
     id: string,
@@ -853,6 +1183,7 @@ export class CategoriesService {
       color?: string | null;
       pinned?: boolean;
       sortOrder?: number;
+      spine?: SpineStyle | null;
     }
   ): Promise<EntryRecord | null> {
     await this.init();
@@ -864,6 +1195,7 @@ export class CategoriesService {
     if (updates.color !== undefined) entry.color = updates.color;
     if (updates.pinned !== undefined) entry.pinned = updates.pinned;
     if (updates.sortOrder !== undefined) entry.sortOrder = updates.sortOrder;
+    if (updates.spine !== undefined) entry.spine = updates.spine;
 
     entry.updatedAt = new Date().toISOString();
     this.entries.set(id, entry);
@@ -872,7 +1204,7 @@ export class CategoriesService {
   }
 
   /**
-   * Save document envelope and compute weight.
+   * Save document envelope and compute weight & stats.
    */
   async saveEntryDoc(
     id: string,
@@ -892,6 +1224,7 @@ export class CategoriesService {
     const calculatedWeight = calculateWeight(doc);
     entry.doc = doc;
     entry.weight = calculatedWeight;
+    entry.stats = calculateEntryStats(doc);
     entry.version += 1;
     entry.updatedAt = new Date().toISOString();
 

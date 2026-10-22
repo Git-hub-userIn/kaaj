@@ -11,6 +11,9 @@
   "dependencies": {
     "@fontsource/kalam": "^5.3.0",
     "@fontsource/newsreader": "^5.3.0",
+    "@fontsource/oswald": "^5.3.0",
+    "@fontsource/playfair-display": "^5.3.0",
+    "@fontsource/special-elite": "^5.3.0",
     "@kaaj/design": "workspace:*",
     "@kaaj/doc-model": "workspace:*",
     "@remixicon/react": "^4.6.0",

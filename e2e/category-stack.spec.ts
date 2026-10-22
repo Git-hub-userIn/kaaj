@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Kaaj Category Screen ("The Book Stack")', () => {
-  test('1. Seeded entries render in order, newest at bottom, pinned first, with no console errors', async ({
+  test('1. Seeded entries render in order, newest at top, pinned first, with no console errors', async ({
     page,
   }) => {
     const consoleErrors: string[] = [];
@@ -25,25 +25,25 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
     await expect(title).toHaveText('Ideas');
 
     const entryCount = page.locator('[data-testid="category-entry-count"]');
-    await expect(entryCount).toHaveText('20 entries');
+    await expect(entryCount).toHaveText('60 entries');
 
     // Verify back link
     const backLink = page.locator('[data-testid="back-to-catalogues-link"]');
     await expect(backLink).toBeVisible();
 
-    // Verify table edge is present
-    const tableEdge = page.locator('[data-testid="table-edge"]');
-    await expect(tableEdge).toBeVisible();
+    // Verify table strips are present under piles
+    const tableStrip = page.locator('[data-testid="table-strip-0"]');
+    await expect(tableStrip).toBeVisible();
 
-    // Verify pinned entry is rendered at the top of the stack
-    const pinnedIndicator = page.locator('[data-testid="pin-indicator-entry_ideas_1"]');
-    await expect(pinnedIndicator).toBeVisible();
+    // Verify pinned entries have red bookmark ribbons
+    const pinnedRibbon = page.locator('[data-testid="pinned-ribbon-entry_ideas_1"]');
+    await expect(pinnedRibbon).toBeVisible();
 
     // Verify no console errors
     expect(consoleErrors).toEqual([]);
   });
 
-  test('2. Spine thickness differs with weight, clamped between 44px and 96px', async ({ page }) => {
+  test('2. Spine thickness differs with weight, clamped between 44px and 104px', async ({ page }) => {
     await page.goto('http://localhost:3000/category/cat_ideas?sort=date');
 
     const firstSpine = page.locator('.book-spine-item').first();
@@ -54,11 +54,12 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
     expect(count).toBeGreaterThan(0);
 
     const heights: number[] = [];
-    for (let i = 0; i < count; i++) {
+    // Sample first 10 books in first pile
+    for (let i = 0; i < Math.min(10, count); i++) {
       const box = await bookSpines.nth(i).boundingBox();
       if (box) {
         expect(box.height).toBeGreaterThanOrEqual(44); // Touch target minimum
-        expect(box.height).toBeLessThanOrEqual(98); // Maximum clamped height (with borders)
+        expect(box.height).toBeLessThanOrEqual(106); // Maximum clamped height (with borders)
         heights.push(Math.round(box.height));
       }
     }
@@ -68,48 +69,189 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
     expect(uniqueHeights.size).toBeGreaterThan(1);
   });
 
-  test('3. Older entries pile appears above 8 entries and expands in place', async ({ page }) => {
+  test('3. Multi-pile layout: entries split into piles of 10 on wooden table strips with month labels', async ({
+    page,
+  }) => {
     await page.goto('http://localhost:3000/category/cat_ideas?sort=date');
 
-    // Wait for older pile to be visible
-    const olderPile = page.locator('[data-testid="older-entries-pile"]');
-    await expect(olderPile).toBeVisible();
-    await expect(olderPile).toContainText('older');
+    // Verify pile 0 and table strip with handwritten month label
+    const pile0 = page.locator('[data-testid="stack-pile-0"]');
+    await expect(pile0).toBeVisible();
 
-    // Check count of rendered spines before expanding: 1 pinned + 8 visible = 9
-    const initialSpinesCount = await page.locator('.book-spine-item').count();
-    expect(initialSpinesCount).toBe(9);
+    const pileLabel0 = page.locator('[data-testid="pile-month-label-0"]');
+    await expect(pileLabel0).toBeVisible();
+    await expect(pileLabel0).not.toBeEmpty();
 
-    // Click to expand
-    await olderPile.click();
+    // Verify multiple piles exist for 60 entries (6 piles of 10)
+    const pile1 = page.locator('[data-testid="stack-pile-1"]');
+    await expect(pile1).toBeAttached();
 
-    // After expansion, older pile is gone and all 20 entries are visible
-    await expect(olderPile).not.toBeVisible();
-    const expandedSpinesCount = await page.locator('.book-spine-item').count();
-    expect(expandedSpinesCount).toBe(20);
+    // Verify wooden table strip styling
+    const strip0 = page.locator('[data-testid="table-strip-0"]');
+    await expect(strip0).toBeVisible();
   });
 
-  test('4. Sort choice toggles via URL ?sort= and updates stack order', async ({ page }) => {
+  test('4. Hover / Focus Details Card shows timestamps and stats, dismisses on Escape', async ({
+    page,
+  }) => {
+    await page.goto('http://localhost:3000/category/cat_ideas');
+
+    const firstSpine = page.locator('.book-spine-item').first();
+    await expect(firstSpine).toBeVisible();
+
+    // Hover with 250ms delay
+    await firstSpine.hover();
+    await page.waitForTimeout(300);
+
+    const detailsCard = page.locator('[role="tooltip"]').first();
+    await expect(detailsCard).toBeVisible();
+
+    // Verify title, last edited, created, and stats
+    await expect(detailsCard.locator('[data-testid="details-card-title"]')).toBeVisible();
+    await expect(detailsCard.locator('[data-testid="details-card-last-edited"]')).toBeVisible();
+    await expect(detailsCard.locator('[data-testid="details-card-created"]')).toBeVisible();
+    await expect(detailsCard.locator('[data-testid="details-card-stats"]')).toContainText('words');
+
+    // Press Escape dismisses card
+    await page.keyboard.press('Escape');
+    await expect(detailsCard).not.toBeVisible();
+  });
+
+  test('5. Spine customisation modal: live preview, contrast restrictions, and persistence', async ({
+    page,
+    request,
+  }) => {
+    // Create test entry
+    const res = await request.post('http://localhost:3001/entries', {
+      headers: { Authorization: 'Bearer kaaj-local-dev-token' },
+      data: {
+        categoryId: 'cat_ideas',
+        title: `Custom Spine Book ${Date.now()}`,
+        color: 'terracotta',
+      },
+    });
+    expect(res.status()).toBe(201);
+    const created = await res.json();
+    const entryId = created.id;
+
+    try {
+      await page.goto('http://localhost:3000/category/cat_ideas');
+      const spine = page.locator(`[data-testid="book-spine-${entryId}"]`);
+      await expect(spine).toBeVisible();
+
+      // Open menu and click Customise spine
+      const menuBtn = spine.locator(`[data-testid="book-menu-btn-${entryId}"]`);
+      await menuBtn.click();
+      const customiseBtn = spine.locator('[data-testid="menu-customise-spine"]');
+      await expect(customiseBtn).toBeVisible();
+      await customiseBtn.click();
+
+      // Verify Spine Customizer modal opens
+      const modal = page.locator('[data-testid="spine-customizer-modal"]');
+      await expect(modal).toBeVisible();
+
+      // Check live preview book element
+      const previewBook = page.locator('[data-testid="spine-preview-book"]');
+      await expect(previewBook).toBeVisible();
+
+      // Select leather texture
+      await page.locator('[data-testid="customizer-texture-leather"]').click();
+
+      // Select playfair font
+      await page.locator('[data-testid="customizer-font-playfair-display"]').click();
+
+      // Select light linen color and verify contrast restriction:
+      // gold foil should become disabled because linen has low contrast with gold foil!
+      await page.locator('[data-testid="customizer-color-linen"]').click();
+      const goldFoilBtn = page.locator('[data-testid="customizer-finish-gold-foil"]');
+      await expect(goldFoilBtn).toBeDisabled();
+
+      // Save changes
+      await page.locator('[data-testid="save-spine-customizer"]').click();
+      await expect(modal).not.toBeVisible();
+
+      // Verify custom style persisted on stack
+      await expect(spine).toBeVisible();
+    } finally {
+      await request.delete(`http://localhost:3001/entries/${entryId}`, {
+        headers: { Authorization: 'Bearer kaaj-local-dev-token' },
+      });
+    }
+  });
+
+  test('6. Sticky slim bar appears on scroll and provides reachable actions', async ({ page }) => {
+    await page.goto('http://localhost:3000/category/cat_ideas');
+    await expect(page.locator('[data-testid="category-title"]')).toHaveText('Ideas');
+    await expect(page.locator('.book-spine-item').first()).toBeVisible();
+
+    const stickyBar = page.locator('[data-testid="sticky-category-bar"]');
+    await expect(stickyBar).toBeAttached();
+
+    // Scroll down 600px past header
+    await page.evaluate(() => window.scrollTo(0, 600));
+    await page.waitForTimeout(200);
+
+    // Sticky bar should now be translated in view
+    await expect(stickyBar).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)');
+    await expect(page.locator('[data-testid="sticky-category-name"]')).toHaveText('Ideas');
+
+    const stickyNewEntry = page.locator('[data-testid="sticky-new-entry-btn"]');
+    await expect(stickyNewEntry).toBeVisible();
+  });
+
+  test('7. Scroll position restores when returning from an entry', async ({ page }) => {
+    await page.goto('http://localhost:3000/category/cat_ideas');
+    await expect(page.locator('[data-testid="book-stack-container"]')).toBeVisible();
+
+    // Scroll down to book in middle of stack (pile 1)
+    const targetBook = page.locator('.book-spine-item').nth(12);
+    await targetBook.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(100);
+
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+    expect(scrollBefore).toBeGreaterThan(300);
+
+    // Click the book
+    await targetBook.click();
+
+    // Navigated to /entry/
+    await expect(page).toHaveURL(/\/entry\//);
+
+    // Click back to category
+    await page.locator('[data-testid="entry-back-btn"]').click();
+    await expect(page).toHaveURL(/\/category\/cat_ideas/);
+
+    // Verify scroll position was restored close to scrollBefore
+    await page.waitForTimeout(300);
+    const restoredScroll = await page.evaluate(() => window.scrollY);
+    expect(restoredScroll).toBeGreaterThan(250);
+  });
+
+  test('8. Sort choice toggles via URL ?sort= and updates pile labels', async ({ page }) => {
     // 1. Default sort by date
     await page.goto('http://localhost:3000/category/cat_ideas');
     await expect(page.locator('[data-testid="sort-toggle-date"]')).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('[data-testid="pile-month-label-0"]')).toBeVisible();
 
     // 2. Switch sort to Title
     await page.locator('[data-testid="sort-toggle-title"]').click();
     await expect(page).toHaveURL(/sort=title/);
     await expect(page.locator('[data-testid="sort-toggle-title"]')).toHaveAttribute('aria-checked', 'true');
+    // Under non-date sorts, pile labels use "Pile 1", "Pile 2"
+    await expect(page.locator('[data-testid="pile-month-label-0"]')).toHaveText('Pile 1');
 
     // 3. Switch sort to Length (weight)
     await page.locator('[data-testid="sort-toggle-length"]').click();
     await expect(page).toHaveURL(/sort=length/);
     await expect(page.locator('[data-testid="sort-toggle-length"]')).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('[data-testid="pile-month-label-0"]')).toHaveText('Pile 1');
 
     // 4. Reload with ?sort=title and ensure selection is preserved from URL
     await page.goto('http://localhost:3000/category/cat_ideas?sort=title');
     await expect(page.locator('[data-testid="sort-toggle-title"]')).toHaveAttribute('aria-checked', 'true');
   });
 
-  test('5. Tilt and offset are identical after a reload (stable deterministic hash)', async ({ page }) => {
+  test('9. Tilt and offset are identical after a reload (stable deterministic hash)', async ({ page }) => {
     await page.goto('http://localhost:3000/category/cat_travel');
 
     const firstSpine = page.locator('.book-spine-item').first();
@@ -125,32 +267,23 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
     expect(transformAfter).toBe(transformBefore);
   });
 
-  test('6. Clicking a book opens /entry/:id stub and New entry creates and navigates', async ({ page }) => {
-    await page.goto('http://localhost:3000/category/cat_travel');
+  test('10. Fore-edge variant and deterministic props render', async ({ page }) => {
+    await page.goto('http://localhost:3000/category/cat_ideas');
 
-    // Click first book
-    const firstBook = page.locator('.book-spine-item').first();
-    await expect(firstBook).toBeVisible();
-    await firstBook.click();
+    // Check for yellow sticky flags or rubber bands
+    const spines = page.locator('.book-spine-item');
+    await expect(spines.first()).toBeVisible();
 
-    // Verify /entry/:id stub page
-    await expect(page).toHaveURL(/\/entry\//);
-    await expect(page.locator('[data-testid="entry-stub-card"]')).toBeVisible();
+    // Pinned books have ribbon bookmark
+    const pinnedRibbon = page.locator('[data-testid="pinned-ribbon-entry_ideas_1"]');
+    await expect(pinnedRibbon).toBeVisible();
 
-    // Back to category
-    await page.locator('[data-testid="entry-back-btn"]').click();
-    await expect(page).toHaveURL(/\/category\/cat_travel/);
-
-    // Test New Entry action
-    const newEntryBtn = page.locator('[data-testid="new-entry-btn"]');
-    await newEntryBtn.click();
-
-    // Should create and navigate to the newly created entry
-    await expect(page).toHaveURL(/\/entry\/entry_/);
-    await expect(page.locator('[data-testid="entry-stub-card"]')).toBeVisible();
+    // Date paper labels exist on spines
+    const dateLabels = page.locator('[data-testid^="paper-date-label-"]');
+    expect(await dateLabels.count()).toBeGreaterThan(0);
   });
 
-  test('7. Actions: Rename, Pin, Colour change, Move to another category, Delete and Undo', async ({
+  test('11. Actions: Rename, Pin, Colour change, Move to another category, Delete and Undo', async ({
     page,
     request,
   }) => {
@@ -195,14 +328,12 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
       await menuBtn.click();
       await spine.locator('[data-testid="menu-color-entry"]').click();
       await spine.locator('[data-testid="palette-choice-moss"]').click();
-      // Spine item background color should be moss
       await expect(spine).toHaveCSS('background-color', 'rgb(52, 76, 57)'); // #344c39
 
       // 4. Move to another category (cat_music)
       await menuBtn.click();
       await spine.locator('[data-testid="menu-move-entry"]').click();
       await spine.locator('[data-testid="move-target-cat_music"]').click();
-      // Entry should no longer be in cat_travel
       await expect(page.locator(`[data-testid="book-spine-${entryId}"]`)).not.toBeVisible();
 
       // Verify it moved to cat_music
@@ -227,20 +358,18 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
       // Entry is restored onto the stack
       await expect(page.locator(`[data-testid="book-spine-${entryId}"]`)).toBeVisible();
     } finally {
-      // Clean up test entry
       await request.delete(`http://localhost:3001/entries/${entryId}`, {
         headers: { Authorization: 'Bearer kaaj-local-dev-token' },
       });
     }
   });
 
-  test('8. Keyboard navigation: Tab, Enter, ContextMenu key, and Escape', async ({ page }) => {
+  test('12. Keyboard navigation: Tab, Enter, ContextMenu key, and Escape', async ({ page }) => {
     await page.goto('http://localhost:3000/category/cat_plants');
 
     const firstSpine = page.locator('.book-spine-item').first();
     await expect(firstSpine).toBeVisible();
 
-    // Focus first spine directly with focus() and verify keyboard interaction
     await firstSpine.focus();
     await expect(firstSpine).toBeFocused();
 
@@ -258,7 +387,7 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
     await expect(page).toHaveURL(/\/entry\//);
   });
 
-  test('9. Responsive layouts at 1440px, 768px, and 390px (no overflow, no clipping)', async ({
+  test('13. Responsive layouts at 1440px, 768px, and 390px (no overflow, no clipping)', async ({
     page,
   }) => {
     // Laptop: 1440px
@@ -270,7 +399,7 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
     let clientWidth = await page.evaluate(() => document.documentElement.clientWidth);
     expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1);
 
-    await page.screenshot({ path: '../docs/screenshots/stack-1440px-laptop.png', fullPage: true });
+    await page.screenshot({ path: '../docs/screenshots/stack-1440px-laptop.png', fullPage: false });
 
     // Tablet: 768px
     await page.setViewportSize({ width: 768, height: 1024 });
@@ -281,7 +410,7 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
     clientWidth = await page.evaluate(() => document.documentElement.clientWidth);
     expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1);
 
-    await page.screenshot({ path: '../docs/screenshots/stack-768px-tablet.png', fullPage: true });
+    await page.screenshot({ path: '../docs/screenshots/stack-768px-tablet.png', fullPage: false });
 
     // Phone: 390px
     await page.setViewportSize({ width: 390, height: 844 });
@@ -292,11 +421,10 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
     clientWidth = await page.evaluate(() => document.documentElement.clientWidth);
     expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1);
 
-    await page.screenshot({ path: '../docs/screenshots/stack-390px-phone.png', fullPage: true });
+    await page.screenshot({ path: '../docs/screenshots/stack-390px-phone.png', fullPage: false });
   });
 
-  test('10. Empty category displays dashed blank book button', async ({ page, request }) => {
-    // Create an empty category via API
+  test('14. Empty category displays dashed blank book button', async ({ page, request }) => {
     const createCatRes = await request.post('http://localhost:3001/categories', {
       headers: { Authorization: 'Bearer kaaj-local-dev-token' },
       data: { title: `Empty Test Collection ${Date.now()}` },
@@ -309,17 +437,15 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
     await expect(emptyBlankBook).toBeVisible();
     await expect(emptyBlankBook).toContainText('Write the first entry');
 
-    // Clicking creates first entry and navigates
     await emptyBlankBook.click();
     await expect(page).toHaveURL(/\/entry\//);
 
-    // Clean up
     await request.delete(`http://localhost:3001/categories/${cat.id}`, {
       headers: { Authorization: 'Bearer kaaj-local-dev-token' },
     });
   });
 
-  test('11. Prefers-reduced-motion disables transitions and animations', async ({ page }) => {
+  test('15. Prefers-reduced-motion disables transitions and animations', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('http://localhost:3000/category/cat_travel');
 

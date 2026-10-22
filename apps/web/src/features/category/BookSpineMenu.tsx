@@ -18,6 +18,8 @@ import {
   RiPushpinFill,
   RiDeleteBinLine,
   RiArrowLeftLine,
+  RiBrushLine,
+  RiInformationLine,
 } from '@remixicon/react';
 
 interface BookSpineMenuProps {
@@ -27,6 +29,8 @@ interface BookSpineMenuProps {
   onStartRename: () => void;
   onMoveToCategory: (categoryId: string) => void;
   onSelectColor: (colorKey: string) => void;
+  onOpenSpineCustomizer?: () => void;
+  onToggleDetails?: () => void;
   onTogglePin: () => void;
   onDelete: () => void;
   isPinned: boolean;
@@ -44,6 +48,8 @@ export const BookSpineMenu: React.FC<BookSpineMenuProps> = ({
   onStartRename,
   onMoveToCategory,
   onSelectColor,
+  onOpenSpineCustomizer,
+  onToggleDetails,
   onTogglePin,
   onDelete,
   isPinned,
@@ -101,7 +107,7 @@ export const BookSpineMenu: React.FC<BookSpineMenuProps> = ({
         border: `1.5px solid ${COLOR_TOKENS.border}`,
         borderRadius: RADIUS_TOKENS.md,
         boxShadow: SHADOW_TOKENS.toast,
-        zIndex: 50,
+        zIndex: 100,
         minWidth: '220px',
         maxWidth: '280px',
         padding: SPACING_TOKENS.xs,
@@ -158,6 +164,22 @@ export const BookSpineMenu: React.FC<BookSpineMenuProps> = ({
             {COPY.openEntry}
           </button>
 
+          {onToggleDetails && (
+            <button
+              type="button"
+              role="menuitem"
+              className="spine-menu-btn"
+              data-testid="menu-view-details"
+              onClick={() => {
+                onClose();
+                onToggleDetails();
+              }}
+            >
+              <RiInformationLine size={16} />
+              View details
+            </button>
+          )}
+
           <button
             type="button"
             role="menuitem"
@@ -171,6 +193,22 @@ export const BookSpineMenu: React.FC<BookSpineMenuProps> = ({
             <RiEditLine size={16} />
             {COPY.renameEntry}
           </button>
+
+          {onOpenSpineCustomizer && (
+            <button
+              type="button"
+              role="menuitem"
+              className="spine-menu-btn"
+              data-testid="menu-customise-spine"
+              onClick={() => {
+                onClose();
+                onOpenSpineCustomizer();
+              }}
+            >
+              <RiBrushLine size={16} />
+              {COPY.customiseSpine}...
+            </button>
+          )}
 
           <button
             type="button"

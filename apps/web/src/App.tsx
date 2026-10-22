@@ -4,6 +4,11 @@ import '@fontsource/newsreader/600.css';
 import '@fontsource/newsreader/700.css';
 import '@fontsource/kalam/400.css';
 import '@fontsource/kalam/700.css';
+import '@fontsource/special-elite/400.css';
+import '@fontsource/oswald/400.css';
+import '@fontsource/oswald/600.css';
+import '@fontsource/playfair-display/400.css';
+import '@fontsource/playfair-display/600.css';
 
 import { HomeScreen } from './features/home/HomeScreen.js';
 import { CategoryStackScreen } from './features/category/CategoryStackScreen.js';

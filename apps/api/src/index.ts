@@ -152,13 +152,13 @@ app.post('/entries', async (c) => {
       return c.json({ error: 'Validation failed', details: parseResult.error.format() }, 422);
     }
 
-    const { categoryId, title, color, pinned } = parseResult.data;
+    const { categoryId, title, color, pinned, spine } = parseResult.data;
     const cat = await categoriesService.getCategory(categoryId);
     if (!cat) {
       return c.json({ error: 'Category not found' }, 404);
     }
 
-    const entry = await categoriesService.createEntry(categoryId, title, color, pinned);
+    const entry = await categoriesService.createEntry(categoryId, title, color, pinned, spine);
     return c.json(entry, 201);
   } catch (err: any) {
     return c.json({ error: err.message || 'Failed to create entry' }, 422);

@@ -1,9 +1,9 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { HomeHeader } from '../home/HomeHeader.js';
 import { BookSpine } from './BookSpine.js';
-import { OlderEntriesPile } from './OlderEntriesPile.js';
 import { EmptyBlankBook } from './EmptyBlankBook.js';
 import { StackSkeleton } from './StackSkeleton.js';
+import { SpineCustomizerModal } from './SpineCustomizerModal.js';
 import { UndoToast } from '../home/UndoToast.js';
 import {
   COLOR_TOKENS,
@@ -14,7 +14,8 @@ import {
   STACK_CONFIG,
   COPY,
 } from '@kaaj/design';
-import type { Category, CategoryLightRow, EntryLightRow } from '@kaaj/doc-model';
+import type { Category, CategoryLightRow, EntryLightRow, SpineStyle } from '@kaaj/doc-model';
+import { getPileLabel } from './stack-utils.js';
 import { RiAddLine, RiArrowLeftLine, RiAlertLine } from '@remixicon/react';
 
 interface CategoryStackScreenProps {
@@ -46,24 +47,15 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     return 'date';
   });
 
-  // Track if older entries pile is expanded
-  const [isOlderExpanded, setIsOlderExpanded] = useState(false);
-
   // Soft delete and undo state
   const [deletedEntry, setDeletedEntry] = useState<{ id: string; title: string } | null>(null);
 
-  // Responsive mobile detector (fewer visible items before fold)
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== 'undefined' ? window.innerWidth <= 640 : false
-  );
+  // Spine Customizer modal state
+  const [customizingEntry, setCustomizingEntry] = useState<EntryLightRow | null>(null);
 
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth <= 640);
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+  // Sticky slim bar visibility state
+  const [showStickyBar, setShowStickyBar] = useState(false);
+  const headerRef = useRef<HTMLElement>(null);
 
   // Sync sort param from URL popstate
   useEffect(() => {
@@ -125,12 +117,51 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     loadData();
   }, [loadData]);
 
+  // Restore scroll position when returning from an entry
+  useEffect(() => {
+    if (!loading && entries.length > 0) {
+      const savedScroll = sessionStorage.getItem(`kaaj-scroll-${categoryId}`);
+      if (savedScroll) {
+        const y = parseInt(savedScroll, 10);
+        if (!isNaN(y) && y > 0) {
+          const timer = setTimeout(() => {
+            window.scrollTo({ top: y, behavior: 'instant' });
+          }, 60);
+          return () => clearTimeout(timer);
+        }
+      }
+    }
+  }, [loading, entries.length, categoryId]);
+
+  // Scroll listener for sticky slim header bar
+  useEffect(() => {
+    const checkSticky = () => {
+      const headerEl = headerRef.current;
+      if (!headerEl) return;
+      const rect = headerEl.getBoundingClientRect();
+      setShowStickyBar(rect.bottom < 0);
+    };
+
+    window.addEventListener('scroll', checkSticky, { passive: true });
+    checkSticky();
+    return () => window.removeEventListener('scroll', checkSticky);
+  }, [loading]);
+
   // Prefetch entry on hover/focus
   const handlePrefetchEntry = useCallback((entryId: string) => {
     fetch(`http://localhost:3001/entries/${entryId}`, {
       headers: { Authorization: 'Bearer kaaj-local-dev-token' },
     }).catch(() => {});
   }, []);
+
+  // Save scroll and navigate to entry
+  const handleOpenEntry = useCallback(
+    (entryId: string) => {
+      sessionStorage.setItem(`kaaj-scroll-${categoryId}`, String(window.scrollY));
+      onNavigateToEntry(entryId);
+    },
+    [categoryId, onNavigateToEntry]
+  );
 
   // Create new entry
   const handleCreateEntry = async () => {
@@ -150,8 +181,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
       if (!res.ok) throw new Error('Failed to create entry');
       const newEntry = await res.json();
 
-      // Navigate to /entry/:id per specification
-      onNavigateToEntry(newEntry.id);
+      handleOpenEntry(newEntry.id);
     } catch (err) {
       console.error('Create entry failed:', err);
     }
@@ -209,6 +239,29 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
           Authorization: 'Bearer kaaj-local-dev-token',
         },
         body: JSON.stringify({ color: colorKey }),
+      });
+    } catch {
+      loadData();
+    }
+  };
+
+  // Customise spine
+  const handleSaveSpine = async (spine: SpineStyle) => {
+    if (!customizingEntry) return;
+    const entryId = customizingEntry.id;
+
+    setEntries((prev) =>
+      prev.map((e) => (e.id === entryId ? { ...e, spine } : e))
+    );
+
+    try {
+      await fetch(`http://localhost:3001/entries/${entryId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer kaaj-local-dev-token',
+        },
+        body: JSON.stringify({ spine }),
       });
     } catch {
       loadData();
@@ -276,8 +329,9 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     }
   };
 
-  // Sorted and partitioned entries
-  const { pinnedEntries, visibleUnpinnedEntries, olderEntriesCount } = useMemo(() => {
+  // Sorted and partitioned entries into piles of N books (default 10)
+  // Per spec: DEFAULT newest on top (first pile), older below. Pinned first.
+  const piles = useMemo(() => {
     // 1. Separate pinned vs unpinned
     const pinned = entries.filter((e) => e.pinned);
     const unpinned = entries.filter((e) => !e.pinned);
@@ -288,35 +342,26 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
         return a.title.localeCompare(b.title);
       }
       if (currentSort === 'length') {
-        // By weight descending (thickest first)
         return b.weight - a.weight;
       }
-      // Default: date ascending (oldest first at top, newest at bottom of the stack)
-      return new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
+      // Default: date descending (newest on top of the stack)
+      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     });
 
-    // 3. Overflow handling: show newest 8 (or 6 on mobile) before folding
-    const maxVisible = isMobile ? STACK_CONFIG.mobileVisibleCount : STACK_CONFIG.defaultVisibleCount;
+    // 3. Combined ordered list: pinned first, then sorted unpinned
+    const allOrdered = [...pinned, ...sortedUnpinned];
 
-    if (currentSort === 'date') {
-      if (sortedUnpinned.length > maxVisible && !isOlderExpanded) {
-        const splitIndex = sortedUnpinned.length - maxVisible;
-        const older = sortedUnpinned.slice(0, splitIndex);
-        const newest = sortedUnpinned.slice(splitIndex);
-        return {
-          pinnedEntries: pinned,
-          visibleUnpinnedEntries: newest,
-          olderEntriesCount: older.length,
-        };
-      }
+    // 4. Split into chunks of N books (STACK_CONFIG.defaultPileSize = 10)
+    const pileChunks: EntryLightRow[][] = [];
+    const pileSize = STACK_CONFIG.defaultPileSize;
+    for (let i = 0; i < allOrdered.length; i += pileSize) {
+      pileChunks.push(allOrdered.slice(i, i + pileSize));
     }
 
-    return {
-      pinnedEntries: pinned,
-      visibleUnpinnedEntries: sortedUnpinned,
-      olderEntriesCount: 0,
-    };
-  }, [entries, currentSort, isOlderExpanded, isMobile]);
+    return pileChunks;
+  }, [entries, currentSort]);
+
+  const isCapped = entries.length >= STACK_CONFIG.maxLightRowsCap;
 
   return (
     <div
@@ -325,16 +370,96 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
         backgroundColor: COLOR_TOKENS.canvas,
         backgroundImage: `
           radial-gradient(${COLOR_TOKENS.paperWarm} 1px, transparent 1px),
-          radial-gradient(${COLOR_TOKENS.paperSubtle} 1px, ${COLOR_TOKENS.canvas} 1px)
+          radial-gradient(${COLOR_TOKENS.paperSubtle} 1px, ${COLOR_TOKENS.canvas} 1px),
+          radial-gradient(ellipse at 50% 30%, transparent 40%, rgba(45, 35, 25, 0.05) 100%)
         `,
-        backgroundSize: '32px 32px',
-        backgroundPosition: '0 0, 16px 16px',
+        backgroundSize: '32px 32px, 32px 32px, 100% 100%',
+        backgroundPosition: '0 0, 16px 16px, 0 0',
         color: COLOR_TOKENS.ink,
         display: 'flex',
         flexDirection: 'column',
       }}
     >
       <HomeHeader />
+
+      {/* Slim Sticky Bar (appears after title area scrolls away) */}
+      <div
+        data-testid="sticky-category-bar"
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: '48px',
+          backgroundColor: 'rgba(252, 251, 247, 0.94)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          borderBottom: `1px solid ${COLOR_TOKENS.border}`,
+          zIndex: 100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: `0 ${SPACING_TOKENS.xl}`,
+          boxShadow: '0 2px 8px rgba(40, 30, 20, 0.08)',
+          transform: showStickyBar ? 'translateY(0)' : 'translateY(-100%)',
+          transition: 'transform 200ms ease-in-out',
+          pointerEvents: showStickyBar ? 'auto' : 'none',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: SPACING_TOKENS.md }}>
+          <button
+            type="button"
+            data-testid="sticky-back-link"
+            onClick={onNavigateHome}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: COLOR_TOKENS.inkMuted,
+              display: 'flex',
+              alignItems: 'center',
+              cursor: 'pointer',
+              padding: '4px',
+            }}
+            aria-label="Back to Catalogues"
+          >
+            <RiArrowLeftLine size={18} />
+          </button>
+          <span
+            data-testid="sticky-category-name"
+            style={{
+              fontFamily: TYPOGRAPHY_TOKENS.fontFamilySerif,
+              fontSize: '18px',
+              fontWeight: 600,
+              color: COLOR_TOKENS.ink,
+            }}
+          >
+            {category?.title || 'Catalogue'}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          data-testid="sticky-new-entry-btn"
+          onClick={handleCreateEntry}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: SPACING_TOKENS.xs,
+            backgroundColor: COLOR_TOKENS.terracotta,
+            color: '#ffffff',
+            border: 'none',
+            borderRadius: RADIUS_TOKENS.xs,
+            padding: '5px 12px',
+            fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+            fontSize: '13px',
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          <RiAddLine size={16} />
+          {COPY.newEntry}
+        </button>
+      </div>
 
       <main
         style={{
@@ -350,7 +475,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
         }}
       >
         {/* Back Link */}
-        <div style={{ width: '100%', maxWidth: '860px', marginBottom: SPACING_TOKENS.sm }}>
+        <div style={{ width: '100%', maxWidth: `${STACK_CONFIG.stackWidthLaptopPx}px`, marginBottom: SPACING_TOKENS.sm }}>
           <button
             type="button"
             data-testid="back-to-catalogues-link"
@@ -377,9 +502,10 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
 
         {/* Category Header Row */}
         <header
+          ref={headerRef}
           style={{
             width: '100%',
-            maxWidth: '860px',
+            maxWidth: `${STACK_CONFIG.stackWidthLaptopPx}px`,
             display: 'flex',
             flexWrap: 'wrap',
             alignItems: 'flex-end',
@@ -501,6 +627,28 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
           </div>
         </header>
 
+        {/* 500 Entry Cap Calm Note Banner */}
+        {isCapped && (
+          <div
+            data-testid="stack-cap-note"
+            style={{
+              width: '100%',
+              maxWidth: `${STACK_CONFIG.stackWidthLaptopPx}px`,
+              padding: `${SPACING_TOKENS.sm} ${SPACING_TOKENS.md}`,
+              backgroundColor: COLOR_TOKENS.paperWarm,
+              border: `1px solid ${COLOR_TOKENS.border}`,
+              borderRadius: RADIUS_TOKENS.sm,
+              marginBottom: SPACING_TOKENS.md,
+              fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+              fontSize: '13px',
+              color: COLOR_TOKENS.inkMuted,
+              textAlign: 'center',
+            }}
+          >
+            {COPY.showingNewestCapped(STACK_CONFIG.maxLightRowsCap)}
+          </div>
+        )}
+
         {/* Stack Content Body */}
         <section
           data-testid="book-stack-container"
@@ -554,85 +702,117 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
           )}
 
           {!loading && !error && entries.length > 0 && (
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <ol
-                role="list"
-                aria-label={`Books in ${category?.title || 'Catalogue'}`}
-                data-testid="book-stack-list"
-                style={{
-                  width: '100%',
-                  padding: 0,
-                  margin: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  boxSizing: 'border-box',
-                }}
-              >
-                {/* 1. Pinned entries at the top of the stack */}
-                {pinnedEntries.map((entry) => (
-                  <BookSpine
-                    key={entry.id}
-                    entry={entry}
-                    categories={allCategories}
-                    currentCategoryId={categoryId}
-                    onOpen={onNavigateToEntry}
-                    onRename={handleRenameEntry}
-                    onMoveToCategory={handleMoveToCategory}
-                    onSelectColor={handleSelectColor}
-                    onTogglePin={handleTogglePin}
-                    onDelete={handleDeleteEntry}
-                    onPrefetch={handlePrefetchEntry}
-                  />
-                ))}
+            <div
+              style={{
+                width: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '40px',
+              }}
+            >
+              {piles.map((pileBooks, pileIdx) => {
+                const pileLabel = getPileLabel(pileBooks, pileIdx, currentSort);
 
-                {/* 2. Folded older entries pile (if collapsed) */}
-                {olderEntriesCount > 0 && !isOlderExpanded && (
-                  <OlderEntriesPile
-                    count={olderEntriesCount}
-                    onExpand={() => setIsOlderExpanded(true)}
-                  />
-                )}
+                return (
+                  <div
+                    key={`pile-${pileIdx}`}
+                    data-testid={`stack-pile-${pileIdx}`}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      contentVisibility: 'auto',
+                      containIntrinsicSize: '0 540px',
+                    }}
+                  >
+                    <ol
+                      role="list"
+                      aria-label={`Books in ${category?.title || 'Catalogue'} - ${pileLabel}`}
+                      data-testid={`book-stack-list-${pileIdx}`}
+                      style={{
+                        width: '100%',
+                        padding: 0,
+                        margin: 0,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        boxSizing: 'border-box',
+                      }}
+                    >
+                      {pileBooks.map((entry) => (
+                        <BookSpine
+                          key={entry.id}
+                          entry={entry}
+                          categories={allCategories}
+                          currentCategoryId={categoryId}
+                          onOpen={handleOpenEntry}
+                          onRename={handleRenameEntry}
+                          onMoveToCategory={handleMoveToCategory}
+                          onSelectColor={handleSelectColor}
+                          onOpenSpineCustomizer={() => setCustomizingEntry(entry)}
+                          onTogglePin={handleTogglePin}
+                          onDelete={handleDeleteEntry}
+                          onPrefetch={handlePrefetchEntry}
+                        />
+                      ))}
+                    </ol>
 
-                {/* 3. Visible unpinned books (leading down to the newest at the bottom) */}
-                {visibleUnpinnedEntries.map((entry) => (
-                  <BookSpine
-                    key={entry.id}
-                    entry={entry}
-                    categories={allCategories}
-                    currentCategoryId={categoryId}
-                    onOpen={onNavigateToEntry}
-                    onRename={handleRenameEntry}
-                    onMoveToCategory={handleMoveToCategory}
-                    onSelectColor={handleSelectColor}
-                    onTogglePin={handleTogglePin}
-                    onDelete={handleDeleteEntry}
-                    onPrefetch={handlePrefetchEntry}
-                  />
-                ))}
-              </ol>
-
-              {/* Physical table edge surface beneath the bottom book */}
-              <div
-                data-testid="table-edge"
-                aria-hidden="true"
-                style={{
-                  width: '100%',
-                  maxWidth: '880px',
-                  height: '22px',
-                  backgroundColor: COLOR_TOKENS.tableSurface,
-                  borderRadius: `${RADIUS_TOKENS.xs} ${RADIUS_TOKENS.xs} ${RADIUS_TOKENS.md} ${RADIUS_TOKENS.md}`,
-                  borderTop: `2px solid ${COLOR_TOKENS.tableEdgeHighlight}`,
-                  borderBottom: `3px solid ${COLOR_TOKENS.tableEdgeShadow}`,
-                  boxShadow: SHADOW_TOKENS.stackBase,
-                  marginTop: '4px',
-                  boxSizing: 'border-box',
-                }}
-              />
+                    {/* Wooden Table Strip for this pile */}
+                    <div
+                      data-testid={`table-strip-${pileIdx}`}
+                      aria-hidden="true"
+                      style={{
+                        width: '100%',
+                        maxWidth: '900px',
+                        height: '24px',
+                        background: `
+                          repeating-linear-gradient(90deg, rgba(255,255,255,0.04) 0px, rgba(255,255,255,0.04) 3px, transparent 3px, transparent 12px),
+                          linear-gradient(180deg, #d8cbbe 0%, #c4b5a3 30%, #b8a692 70%, #9e8a75 100%)
+                        `,
+                        borderRadius: `${RADIUS_TOKENS.xs} ${RADIUS_TOKENS.xs} ${RADIUS_TOKENS.sm} ${RADIUS_TOKENS.sm}`,
+                        borderTop: '2px solid rgba(255,255,255,0.45)',
+                        borderBottom: '3px solid rgba(40,30,20,0.3)',
+                        boxShadow: SHADOW_TOKENS.tableStrip,
+                        marginTop: '4px',
+                        boxSizing: 'border-box',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'flex-end',
+                        padding: '0 18px',
+                      }}
+                    >
+                      <span
+                        data-testid={`pile-month-label-${pileIdx}`}
+                        style={{
+                          fontFamily: TYPOGRAPHY_TOKENS.fontFamilyHandwriting,
+                          fontSize: '13px',
+                          color: '#42372c',
+                          letterSpacing: '0.02em',
+                          textShadow: '0 1px 0 rgba(255,255,255,0.35)',
+                        }}
+                      >
+                        {pileLabel}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>
       </main>
+
+      {/* Spine Customizer Modal */}
+      {customizingEntry && (
+        <SpineCustomizerModal
+          isOpen={Boolean(customizingEntry)}
+          onClose={() => setCustomizingEntry(null)}
+          entry={customizingEntry}
+          onSave={handleSaveSpine}
+        />
+      )}
 
       {/* Soft Delete Undo Toast */}
       {deletedEntry && (
