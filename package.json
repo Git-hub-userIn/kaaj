@@ -1,0 +1,19 @@
+{
+  "name": "kaaj-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "e2e"
+  ],
+  "scripts": {
+    "dev": "bun run --filter \"*\" dev",
+    "build": "bun run --filter \"*\" build",
+    "test:e2e": "bun --filter e2e test",
+    "typecheck": "bun run --filter \"*\" typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

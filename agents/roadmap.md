@@ -6,7 +6,7 @@ This document tracks progress through the development phases defined in Section 
 
 | Phase | Title | Status | Primary Focus |
 | :--- | :--- | :--- | :--- |
-| **Phase 0** | Audit and Spike | **IN PROGRESS** | Library verification, editor canvas spike, SVG overlay, asset pipeline test |
+| **Phase 0** | Audit and Spike | **COMPLETED** | Library verification, editor canvas spike, SVG overlay, asset pipeline test |
 | **Phase 1** | Foundations | PENDING | Monorepo setup, `doc-model`, `design`, Prisma schema, auth seam, AssetStore |
 | **Phase 2** | Browsing | PENDING | Category collage, messy book stack, CRUD actions, responsive layout |
 | **Phase 3** | Base Editor | PENDING | Tiptap integration, adapter, autosave queue, locks, IndexedDB draft |
