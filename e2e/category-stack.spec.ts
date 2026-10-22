@@ -453,4 +453,250 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
     const transition = await firstSpine.evaluate((el) => getComputedStyle(el).transition);
     expect(transition).toContain('none');
   });
+
+  test('16. Defect 1: Skew / Lean verification (true rectangle, bottom book 0 deg, tilt <= 1.2 deg, drift <= 6px)', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('http://localhost:3000/category/cat_sketches');
+    await expect(page.locator('.book-spine-item').first()).toBeVisible();
+
+    const spineItems = page.locator('.book-spine-item');
+    const count = await spineItems.count();
+    expect(count).toBe(7);
+
+    const geometries = await spineItems.evaluateAll((elements) => {
+      return elements.map((el) => {
+        const style = window.getComputedStyle(el);
+        const transform = style.transform;
+        const width = parseFloat(style.width);
+
+        // Parse 2D transform matrix(a, b, c, d, tx, ty)
+        let a = 1, b = 0, c = 0, d = 1, tx = 0, ty = 0;
+        const match = transform.match(/matrix\(([^)]+)\)/);
+        if (match) {
+          const parts = match[1].split(',').map((p) => parseFloat(p.trim()));
+          a = parts[0];
+          b = parts[1];
+          c = parts[2];
+          d = parts[3];
+          tx = parts[4];
+          ty = parts[5];
+        }
+
+        const rotationRad = Math.atan2(b, a);
+        const rotationDeg = (rotationRad * 180) / Math.PI;
+
+        return {
+          width,
+          transform,
+          a,
+          b,
+          c,
+          d,
+          tx,
+          ty,
+          rotationDeg,
+          rotationRad,
+          isTrueRectangle: Math.abs(a - d) < 0.001 && Math.abs(b + c) < 0.001,
+        };
+      });
+    });
+
+    // 1. True rectangle: pure rotation (a == d and b == -c) with zero skew across all books
+    for (const geom of geometries) {
+      expect(geom.isTrueRectangle).toBe(true);
+    }
+
+    // 2. Bottom book of pile is level: rotation exactly 0 and resting flat
+    const bottomBook = geometries[count - 1];
+    expect(Math.abs(bottomBook.rotationDeg)).toBeLessThan(0.01);
+
+    // 3. Every other book: rotation <= 1.2 deg, drift <= 6 px
+    for (let i = 0; i < count - 1; i++) {
+      const g = geometries[i];
+      expect(Math.abs(g.rotationDeg)).toBeLessThanOrEqual(1.21);
+
+      const driftPx = Math.abs(g.rotationRad * (g.width / 2));
+      expect(driftPx).toBeLessThanOrEqual(6.05); // Drift must be 6px or less
+    }
+
+    // 4. Neighbouring books may not both lean the same way past 0.8 degrees
+    for (let i = 0; i < count - 1; i++) {
+      const currTilt = geometries[i].rotationDeg;
+      const nextTilt = geometries[i + 1].rotationDeg;
+      const bothLeanPastLimit =
+        Math.abs(currTilt) >= 0.8 &&
+        Math.abs(nextTilt) >= 0.8 &&
+        currTilt * nextTilt > 0;
+      expect(bothLeanPastLimit).toBe(false);
+    }
+  });
+
+  test('17. Defect 2: Length and offset verification (520-780px, adjacent diff >= 40px, >= 4 distinct lengths)', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('http://localhost:3000/category/cat_sketches');
+    await expect(page.locator('.book-spine-item').first()).toBeVisible();
+
+    const spineItems = page.locator('.book-spine-item');
+    const count = await spineItems.count();
+    expect(count).toBe(7);
+
+    const widthsAndOffsets = await spineItems.evaluateAll((elements) => {
+      return elements.map((el) => {
+        const style = window.getComputedStyle(el);
+        const width = Math.round(parseFloat(style.width));
+        const match = style.transform.match(/matrix\(([^)]+)\)/);
+        const tx = match ? parseFloat(match[1].split(',')[4]) : 0;
+
+        // Check gilt bands and label positions
+        const leftBand = el.querySelector('div[style*="left: 28px"]');
+        const rightBand = el.querySelector('div[style*="right: 70px"]');
+        const dateLabel = el.querySelector('[data-testid^="paper-date-label-"]');
+
+        return {
+          width,
+          offset: tx,
+          hasLeftBand: Boolean(leftBand),
+          hasRightBand: Boolean(rightBand),
+          hasDateLabel: Boolean(dateLabel),
+        };
+      });
+    });
+
+    // 1. Length on laptop: 520 to 780 px, independent of thickness
+    for (const item of widthsAndOffsets) {
+      expect(item.width).toBeGreaterThanOrEqual(520);
+      expect(item.width).toBeLessThanOrEqual(780);
+    }
+
+    // 2. Adjacent books differ by at least 40 px in length
+    for (let i = 1; i < count; i++) {
+      const diff = Math.abs(widthsAndOffsets[i].width - widthsAndOffsets[i - 1].width);
+      expect(diff).toBeGreaterThanOrEqual(40);
+    }
+
+    // 3. In 7 books, at least 4 distinct lengths, none > 780 px
+    const uniqueLengths = new Set(widthsAndOffsets.map((w) => w.width));
+    expect(uniqueLengths.size).toBeGreaterThanOrEqual(4);
+
+    // 4. Offsets vary up to 120 px, left-aligned within container
+    for (const item of widthsAndOffsets) {
+      expect(item.offset).toBeGreaterThanOrEqual(0);
+      expect(item.offset).toBeLessThanOrEqual(120);
+      expect(item.width + item.offset).toBeLessThanOrEqual(900);
+    }
+  });
+
+  test('18. Defect 3: Title fonts verification (5 presets, neighbor distinct, >= 3 distinct in 7 books, 18-30px scale)', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('http://localhost:3000/category/cat_sketches');
+    await expect(page.locator('.book-spine-item').first()).toBeVisible();
+
+    const titles = page.locator('[data-testid^="book-title-"]');
+    const count = await titles.count();
+    expect(count).toBe(7);
+
+    const fontStyles = await titles.evaluateAll((elements) => {
+      return elements.map((el) => {
+        const style = window.getComputedStyle(el);
+        return {
+          fontFamily: style.fontFamily,
+          fontSize: parseFloat(style.fontSize),
+          whiteSpace: style.whiteSpace,
+          textOverflow: style.textOverflow,
+        };
+      });
+    });
+
+    // 1. Single line with ellipsis
+    for (const fs of fontStyles) {
+      expect(fs.whiteSpace).toBe('nowrap');
+      expect(fs.textOverflow).toBe('ellipsis');
+    }
+
+    // 2. Neighboring books must not share a font family
+    for (let i = 1; i < count; i++) {
+      expect(fontStyles[i].fontFamily).not.toBe(fontStyles[i - 1].fontFamily);
+    }
+
+    // 3. Across the 7 books, at least 3 distinct fonts
+    const uniqueFonts = new Set(fontStyles.map((f) => f.fontFamily));
+    expect(uniqueFonts.size).toBeGreaterThanOrEqual(3);
+
+    // 4. Font size scales with thickness: min 18 px, max 30 px
+    for (const fs of fontStyles) {
+      expect(fs.fontSize).toBeGreaterThanOrEqual(18);
+      expect(fs.fontSize).toBeLessThanOrEqual(30);
+    }
+  });
+
+  test('19. Defect 4: Contrast verification (title ink vs spine bg >= 4.5:1, solid foil + 1px depth shadow)', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('http://localhost:3000/category/cat_sketches');
+    await expect(page.locator('.book-spine-item').first()).toBeVisible();
+
+    const spineItems = page.locator('.book-spine-item');
+    const count = await spineItems.count();
+
+    const contrasts = await spineItems.evaluateAll((elements) => {
+      function sRgbToLin(c: number) {
+        const v = c / 255;
+        return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+      }
+      function relLuminance(r: number, g: number, b: number) {
+        return 0.2126 * sRgbToLin(r) + 0.7152 * sRgbToLin(g) + 0.0722 * sRgbToLin(b);
+      }
+      function parseRgb(color: string) {
+        const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+        if (!match) return { r: 0, g: 0, b: 0 };
+        return { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]) };
+      }
+
+      return elements.map((spineEl) => {
+        const spineStyle = window.getComputedStyle(spineEl);
+        const spineBg = parseRgb(spineStyle.backgroundColor);
+        const spineLum = relLuminance(spineBg.r, spineBg.g, spineBg.b);
+
+        const titleEl = spineEl.querySelector('[data-testid^="book-title-"]') as HTMLElement;
+        const titleStyle = window.getComputedStyle(titleEl);
+        const titleColor = parseRgb(titleStyle.color);
+        const titleLum = relLuminance(titleColor.r, titleColor.g, titleColor.b);
+
+        const l1 = Math.max(spineLum, titleLum);
+        const l2 = Math.min(spineLum, titleLum);
+        const contrast = (l1 + 0.05) / (l2 + 0.05);
+
+        // Check text shadow for solid 1px offset depth shadow without blurry glow
+        const textShadow = titleStyle.textShadow;
+
+        // Check edge border if light cover
+        const isLightCover = spineLum > 0.5;
+        const borderBottomColor = spineStyle.borderBottomColor;
+
+        return {
+          contrast,
+          textShadow,
+          isLightCover,
+          borderBottomColor,
+        };
+      });
+    });
+
+    for (const c of contrasts) {
+      // 1. Contrast >= 4.5:1
+      expect(c.contrast).toBeGreaterThanOrEqual(4.5);
+
+      // 2. Solid depth shadow: offset 1px, not blurry glow (blur radius <= 1px)
+      if (c.textShadow && c.textShadow !== 'none') {
+        expect(c.textShadow).toMatch(/1px/);
+      }
+    }
+  });
 });

@@ -11,13 +11,18 @@ import {
   SPINE_FONTS,
   SPINE_FINISHES,
 } from '@kaaj/design';
-import { getBookGeometry, formatDate } from './stack-utils.js';
+import {
+  computePileGeometries,
+  formatDate,
+  type BookGeometry,
+} from './stack-utils.js';
 import { BookSpineMenu } from './BookSpineMenu.js';
 import { BookDetailsCard } from './BookDetailsCard.js';
 import { RiMoreFill, RiPushpinFill } from '@remixicon/react';
 
 interface BookSpineProps {
   entry: EntryLightRow;
+  geometry?: BookGeometry;
   categories: CategoryLightRow[];
   currentCategoryId: string;
   onOpen: (entryId: string) => void;
@@ -32,6 +37,7 @@ interface BookSpineProps {
 
 export const BookSpine: React.FC<BookSpineProps> = ({
   entry,
+  geometry: propGeometry,
   categories,
   currentCategoryId,
   onOpen,
@@ -55,8 +61,12 @@ export const BookSpine: React.FC<BookSpineProps> = ({
   const spineRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  const hasCustomSpine = Boolean(entry.spine);
-  const geometry = getBookGeometry(entry.id, entry.weight, entry.color, hasCustomSpine);
+  // Fallback to computing single geometry if not passed in via pile
+  const geometry = React.useMemo(() => {
+    if (propGeometry) return propGeometry;
+    return computePileGeometries([entry]).get(entry.id)!;
+  }, [propGeometry, entry]);
+
   const formattedDate = formatDate(entry.updatedAt);
   const accessibleName = `${entry.title}, ${formattedDate || 'recent'}, weight ${entry.weight}`;
   const detailsCardId = `details-card-${entry.id}`;
@@ -66,16 +76,8 @@ export const BookSpine: React.FC<BookSpineProps> = ({
     ? SPINE_TEXTURES[entry.spine.texture]
     : SPINE_TEXTURES.cloth;
 
-  const fontConfig = entry.spine?.font
-    ? SPINE_FONTS[entry.spine.font]
-    : SPINE_FONTS.newsreader;
-
-  const finishConfig = entry.spine?.finish
-    ? SPINE_FINISHES[entry.spine.finish]
-    : SPINE_FINISHES['gold-foil'];
-
+  const fontPreset = SPINE_FONTS[geometry.fontKey] || SPINE_FONTS.newsreader;
   const bandsConfig = entry.spine?.bands ?? 'two';
-
   const spineBgColor = entry.spine?.color || geometry.palette.bg;
   const isForeEdge = geometry.variant === 'fore-edge';
 
@@ -127,7 +129,6 @@ export const BookSpine: React.FC<BookSpineProps> = ({
   };
 
   const handleBlur = (e: React.FocusEvent) => {
-    // Check if new focus target is still inside this spine
     if (spineRef.current && spineRef.current.contains(e.relatedTarget as Node)) {
       return;
     }
@@ -211,7 +212,7 @@ export const BookSpine: React.FC<BookSpineProps> = ({
         padding: '0',
         width: '100%',
         display: 'flex',
-        justifyContent: 'center',
+        justifyContent: 'flex-start',
         marginTop: '-2px',
         zIndex: isMenuOpen ? 70 : (showDetails ? 50 : (isHovered || isFocused ? 20 : 1)),
       }}
@@ -238,24 +239,30 @@ export const BookSpine: React.FC<BookSpineProps> = ({
           display: 'block',
           position: 'relative',
           boxSizing: 'border-box',
-          width: `${geometry.widthPercent}%`,
+          width: `${geometry.lengthPx}px`,
+          maxWidth: '100%',
           height: `${geometry.heightPx}px`,
           backgroundColor: isForeEdge ? '#faf6ee' : spineBgColor,
           backgroundImage: isForeEdge
             ? 'repeating-linear-gradient(0deg, #ede7db 0px, #ede7db 1px, #faf6ee 1px, #faf6ee 3px)'
-            : `${textureConfig.cssPattern}, radial-gradient(circle at 0% 0%, rgba(255,255,255,0.12) 0%, transparent 12px), radial-gradient(circle at 100% 0%, rgba(255,255,255,0.12) 0%, transparent 12px), radial-gradient(circle at 0% 100%, rgba(0,0,0,0.2) 0%, transparent 12px), radial-gradient(circle at 100% 100%, rgba(0,0,0,0.2) 0%, transparent 12px)`,
+            : `${textureConfig.cssPattern}, radial-gradient(circle at 0% 0%, rgba(255,255,255,0.08) 0%, transparent 12px), radial-gradient(circle at 100% 0%, rgba(255,255,255,0.08) 0%, transparent 12px), radial-gradient(circle at 0% 100%, rgba(0,0,0,0.18) 0%, transparent 12px), radial-gradient(circle at 100% 100%, rgba(0,0,0,0.18) 0%, transparent 12px)`,
           borderRadius: RADIUS_TOKENS.xs,
-          boxShadow: isHovered || isFocused ? SHADOW_TOKENS.bookSpineHover : SHADOW_TOKENS.bookSpine,
+          boxShadow: isHovered || isFocused
+            ? SHADOW_TOKENS.bookSpineHover
+            : (geometry.edgeShadow || SHADOW_TOKENS.bookSpine),
           borderTop: isForeEdge
             ? `3px solid ${spineBgColor}`
-            : '1.5px solid rgba(255, 255, 255, 0.28)',
+            : (geometry.edgeBorder ? `1px solid ${geometry.edgeBorder}` : '1px solid rgba(255, 255, 255, 0.22)'),
           borderBottom: isForeEdge
             ? `3px solid ${spineBgColor}`
-            : '2.5px solid rgba(0, 0, 0, 0.38)',
+            : (geometry.edgeBorder ? `2px solid ${geometry.edgeBorder}` : '2px solid rgba(0, 0, 0, 0.45)'),
+          borderLeft: geometry.edgeBorder ? `1px solid ${geometry.edgeBorder}` : '1px solid rgba(0,0,0,0.1)',
+          borderRight: geometry.edgeBorder ? `1px solid ${geometry.edgeBorder}` : '1px solid rgba(0,0,0,0.1)',
           cursor: isRenaming ? 'text' : 'pointer',
           userSelect: 'none',
           outlineOffset: '2px',
           transform: `translateX(${geometry.offsetDesktopPx + (isHovered || isFocused ? STACK_CONFIG.slideOffsetPx : 0)}px) rotate(${geometry.tiltDeg}deg)`,
+          transformOrigin: 'center center',
           transition: 'transform 180ms cubic-bezier(0.2, 0, 0, 1), box-shadow 180ms ease-out',
         }}
       >
@@ -271,13 +278,29 @@ export const BookSpine: React.FC<BookSpineProps> = ({
               animation: none !important;
             }
           }
-          @media (max-width: 640px) {
-            .book-spine-item {
-              width: 98% !important;
-              transform: translateX(${geometry.offsetMobilePx + (isHovered || isFocused ? 6 : 0)}px) rotate(${geometry.tiltDeg * 0.7}deg) !important;
+          @media (max-width: 1024px) {
+            [data-entry-id="${entry.id}"] {
+              width: min(calc(${geometry.lengthPx}px * 0.78), calc(100% - ${Math.round(geometry.offsetDesktopPx * 0.65)}px)) !important;
+              transform: translateX(${Math.round(geometry.offsetDesktopPx * 0.65 + (isHovered || isFocused ? 8 : 0))}px) rotate(${geometry.tiltDeg}deg) !important;
             }
-            .book-spine-content {
+            [data-entry-id="${entry.id}"] [data-testid^="book-title-"] {
+              font-size: ${Math.max(16, Math.round(geometry.fontSizePx * 0.85))}px !important;
+            }
+          }
+          @media (max-width: 640px) {
+            [data-entry-id="${entry.id}"] {
+              width: min(calc(${geometry.lengthPx}px * 0.44), calc(100% - ${Math.round(geometry.offsetDesktopPx * 0.25)}px)) !important;
+              transform: translateX(${Math.round(geometry.offsetDesktopPx * 0.25 + (isHovered || isFocused ? 4 : 0))}px) rotate(${geometry.tiltDeg * 0.7}deg) !important;
+            }
+            [data-entry-id="${entry.id}"] .book-spine-content {
               padding: 0 10px !important;
+            }
+            [data-entry-id="${entry.id}"] [data-testid^="book-title-"] {
+              font-size: ${Math.max(13, Math.round(geometry.fontSizePx * 0.62))}px !important;
+            }
+            [data-entry-id="${entry.id}"] [data-testid^="paper-date-label-"] {
+              font-size: 11px !important;
+              padding: 1px 5px !important;
             }
           }
         `}</style>
@@ -324,9 +347,9 @@ export const BookSpine: React.FC<BookSpineProps> = ({
                 top: 0,
                 bottom: 0,
                 width: bandsConfig === 'three' ? '12px' : '8px',
-                borderLeft: '1.5px solid rgba(245, 215, 127, 0.75)',
-                borderRight: bandsConfig === 'three' ? '1.5px solid rgba(245, 215, 127, 0.75)' : undefined,
-                boxShadow: '0 0 2px rgba(0,0,0,0.3)',
+                borderLeft: '1.5px solid rgba(242, 212, 130, 0.85)',
+                borderRight: bandsConfig === 'three' ? '1.5px solid rgba(242, 212, 130, 0.85)' : undefined,
+                boxShadow: '0 0 2px rgba(0,0,0,0.35)',
                 zIndex: 3,
                 pointerEvents: 'none',
               }}
@@ -334,13 +357,13 @@ export const BookSpine: React.FC<BookSpineProps> = ({
             <div
               style={{
                 position: 'absolute',
-                right: '80px',
+                right: '70px',
                 top: 0,
                 bottom: 0,
                 width: bandsConfig === 'three' ? '12px' : '8px',
-                borderLeft: '1.5px solid rgba(245, 215, 127, 0.75)',
-                borderRight: bandsConfig === 'three' ? '1.5px solid rgba(245, 215, 127, 0.75)' : undefined,
-                boxShadow: '0 0 2px rgba(0,0,0,0.3)',
+                borderLeft: '1.5px solid rgba(242, 212, 130, 0.85)',
+                borderRight: bandsConfig === 'three' ? '1.5px solid rgba(242, 212, 130, 0.85)' : undefined,
+                boxShadow: '0 0 2px rgba(0,0,0,0.35)',
                 zIndex: 3,
                 pointerEvents: 'none',
               }}
@@ -376,7 +399,7 @@ export const BookSpine: React.FC<BookSpineProps> = ({
             style={{
               position: 'absolute',
               top: '-10px',
-              left: `${geometry.flagOffsetPercent}%`,
+              left: `${geometry.flagOffsetPx}px`,
               width: '28px',
               height: '16px',
               backgroundColor: COLOR_TOKENS.stickyFlag,
@@ -399,7 +422,7 @@ export const BookSpine: React.FC<BookSpineProps> = ({
               position: 'absolute',
               top: '-3px',
               bottom: '-3px',
-              left: `${geometry.rubberBandOffsetPercent}%`,
+              left: `${geometry.rubberBandOffsetPx}px`,
               width: '5px',
               backgroundColor: COLOR_TOKENS.rubberBand,
               boxShadow: `0 0 3px ${COLOR_TOKENS.rubberBandShadow}, inset 0 1px 1px rgba(255,255,255,0.4)`,
@@ -410,7 +433,7 @@ export const BookSpine: React.FC<BookSpineProps> = ({
           />
         )}
 
-        {/* Counter-rotated content container so titles stay strictly horizontal */}
+        {/* Content Container - True Rectangle, moves as one unified book */}
         <div
           className="book-spine-content"
           style={{
@@ -421,8 +444,6 @@ export const BookSpine: React.FC<BookSpineProps> = ({
             justifyContent: 'space-between',
             padding: `0 ${SPACING_TOKENS.lg}`,
             boxSizing: 'border-box',
-            transform: `rotate(${-geometry.tiltDeg}deg)`,
-            transformOrigin: 'center center',
             position: 'relative',
             zIndex: 10,
           }}
@@ -472,9 +493,9 @@ export const BookSpine: React.FC<BookSpineProps> = ({
                 }}
                 onClick={(e) => e.stopPropagation()}
                 style={{
-                  fontFamily: fontConfig.fontFamily,
-                  fontSize: '16px',
-                  fontWeight: 600,
+                  fontFamily: fontPreset.fontFamily,
+                  fontSize: `${geometry.fontSizePx}px`,
+                  fontWeight: fontPreset.fontWeight,
                   color: COLOR_TOKENS.ink,
                   backgroundColor: COLOR_TOKENS.paper,
                   border: `1.5px solid ${COLOR_TOKENS.terracotta}`,
@@ -515,9 +536,9 @@ export const BookSpine: React.FC<BookSpineProps> = ({
                 <span
                   data-testid={`book-title-${entry.id}`}
                   style={{
-                    fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
-                    fontSize: '14px',
-                    fontWeight: 600,
+                    fontFamily: fontPreset.fontFamily,
+                    fontSize: `${geometry.fontSizePx}px`,
+                    fontWeight: fontPreset.fontWeight,
                     color: COLOR_TOKENS.ink,
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
@@ -528,19 +549,20 @@ export const BookSpine: React.FC<BookSpineProps> = ({
                 </span>
               </div>
             ) : (
-              /* Standard Spine: Title stamped in foil or ink */
+              /* Standard Spine: Title stamped in solid foil or ink with 1px depth shadow */
               <span
                 data-testid={`book-title-${entry.id}`}
                 style={{
-                  fontFamily: fontConfig.fontFamily,
-                  fontSize: '17px',
-                  fontWeight: 600,
-                  letterSpacing: '0.01em',
+                  fontFamily: fontPreset.fontFamily,
+                  fontSize: `${geometry.fontSizePx}px`,
+                  fontWeight: fontPreset.fontWeight,
+                  letterSpacing: geometry.letterSpacing,
+                  textTransform: (geometry.textTransform as any) || 'none',
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
-                  color: finishConfig.textColor,
-                  textShadow: finishConfig.textShadow,
+                  color: geometry.textColor,
+                  textShadow: geometry.textShadow,
                   lineHeight: 1.2,
                 }}
               >
@@ -556,7 +578,7 @@ export const BookSpine: React.FC<BookSpineProps> = ({
               alignItems: 'center',
               gap: SPACING_TOKENS.sm,
               flexShrink: 0,
-              paddingRight: !isForeEdge ? '14px' : '6px',
+              paddingRight: !isForeEdge ? '12px' : '4px',
             }}
           >
             {formattedDate && (
@@ -598,7 +620,7 @@ export const BookSpine: React.FC<BookSpineProps> = ({
                 borderRadius: RADIUS_TOKENS.xs,
                 backgroundColor: isForeEdge ? 'rgba(0, 0, 0, 0.08)' : 'rgba(255, 255, 255, 0.16)',
                 border: 'none',
-                color: isForeEdge ? COLOR_TOKENS.ink : finishConfig.textColor,
+                color: isForeEdge ? COLOR_TOKENS.ink : geometry.textColor,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',

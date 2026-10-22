@@ -15,7 +15,7 @@ import {
   COPY,
 } from '@kaaj/design';
 import type { Category, CategoryLightRow, EntryLightRow, SpineStyle } from '@kaaj/doc-model';
-import { getPileLabel } from './stack-utils.js';
+import { getPileLabel, computePileGeometries } from './stack-utils.js';
 import { RiAddLine, RiArrowLeftLine, RiAlertLine } from '@remixicon/react';
 
 interface CategoryStackScreenProps {
@@ -713,6 +713,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
             >
               {piles.map((pileBooks, pileIdx) => {
                 const pileLabel = getPileLabel(pileBooks, pileIdx, currentSort);
+                const pileGeometries = computePileGeometries(pileBooks);
 
                 return (
                   <div
@@ -720,6 +721,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
                     data-testid={`stack-pile-${pileIdx}`}
                     style={{
                       width: '100%',
+                      maxWidth: `${STACK_CONFIG.stackWidthLaptopPx}px`,
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'center',
@@ -733,11 +735,12 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
                       data-testid={`book-stack-list-${pileIdx}`}
                       style={{
                         width: '100%',
+                        maxWidth: `${STACK_CONFIG.stackWidthLaptopPx}px`,
                         padding: 0,
                         margin: 0,
                         display: 'flex',
                         flexDirection: 'column',
-                        alignItems: 'center',
+                        alignItems: 'flex-start',
                         boxSizing: 'border-box',
                       }}
                     >
@@ -745,6 +748,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
                         <BookSpine
                           key={entry.id}
                           entry={entry}
+                          geometry={pileGeometries.get(entry.id)}
                           categories={allCategories}
                           currentCategoryId={categoryId}
                           onOpen={handleOpenEntry}

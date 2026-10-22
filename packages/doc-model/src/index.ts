@@ -135,6 +135,10 @@ export const SpineFontSchema = z.enum([
 export const SpineFinishSchema = z.enum([
   'gold-foil',
   'silver-foil',
+  'cream-foil',
+  'white-foil',
+  'dark-ink',
+  'brown-ink',
   'white-ink',
   'black-ink',
 ]);

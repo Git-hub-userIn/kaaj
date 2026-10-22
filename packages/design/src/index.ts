@@ -66,122 +66,151 @@ export interface SpinePaletteToken {
   accent: string;
   ribbon: string;
   isDark: boolean;
+  allowedInks: readonly string[];
+  defaultInk: string;
+  edgeBorder?: string;
+  edgeShadow?: string;
 }
 
 /**
  * Curated book spine palette combinations.
  * Every pair strictly exceeds WCAG 4.5:1 text contrast.
+ * Light covers declare dark ink only and dark edge borders (>= 3:1 vs page).
  */
 export const SPINE_PALETTES: Record<string, SpinePaletteToken> = {
   terracotta: {
     id: 'terracotta',
     label: 'Terracotta',
     bg: '#8c3a1e',
-    text: '#fdf9f4',
+    text: '#f2d482',
     borderTop: '#ab5435',
     borderBottom: '#632511',
     accent: '#d4886e',
     ribbon: '#d9822b',
     isDark: true,
+    allowedInks: ['gold-foil', 'cream-foil', 'white-foil'],
+    defaultInk: 'gold-foil',
   },
   moss: {
     id: 'moss',
     label: 'Deep Moss',
     bg: '#344c39',
-    text: '#f4f8f4',
+    text: '#f2d482',
     borderTop: '#49664f',
     borderBottom: '#223326',
     accent: '#7b9880',
     ribbon: '#d9822b',
     isDark: true,
+    allowedInks: ['gold-foil', 'cream-foil', 'white-foil'],
+    defaultInk: 'gold-foil',
   },
   slate: {
     id: 'slate',
     label: 'Slate Navy',
     bg: '#2e414c',
-    text: '#f2f7fa',
+    text: '#e8edf2',
     borderTop: '#445b68',
     borderBottom: '#1c2b33',
     accent: '#7c96a5',
     ribbon: '#c25e38',
     isDark: true,
+    allowedInks: ['silver-foil', 'gold-foil', 'cream-foil', 'white-foil'],
+    defaultInk: 'silver-foil',
   },
   amber: {
     id: 'amber',
     label: 'Aged Amber',
     bg: '#7a4813',
-    text: '#fffaf2',
+    text: '#f2d482',
     borderTop: '#995e1e',
     borderBottom: '#54300a',
     accent: '#d99a54',
     ribbon: '#506654',
     isDark: true,
+    allowedInks: ['gold-foil', 'cream-foil', 'white-foil'],
+    defaultInk: 'gold-foil',
   },
   indigo: {
     id: 'indigo',
     label: 'Midnight Indigo',
     bg: '#263449',
-    text: '#f3f6fc',
+    text: '#e8edf2',
     borderTop: '#3b4e6a',
     borderBottom: '#172130',
     accent: '#7990b3',
     ribbon: '#d9822b',
     isDark: true,
+    allowedInks: ['silver-foil', 'gold-foil', 'cream-foil', 'white-foil'],
+    defaultInk: 'silver-foil',
   },
   linen: {
     id: 'linen',
     label: 'Vintage Linen',
     bg: '#ede6d8',
-    text: '#24201b',
+    text: '#181513',
     borderTop: '#fdfbf7',
-    borderBottom: '#d0c6b4',
+    borderBottom: '#7a6e5b',
     accent: '#8c3a1e',
     ribbon: '#8c3a1e',
     isDark: false,
+    allowedInks: ['dark-ink', 'brown-ink'],
+    defaultInk: 'dark-ink',
+    edgeBorder: '#7a6e5b',
+    edgeShadow: '0 4px 12px rgba(35, 25, 15, 0.22), 0 1px 3px rgba(35, 25, 15, 0.15)',
   },
   paper: {
     id: 'paper',
     label: 'Warm Parchment',
     bg: '#dfd7c5',
-    text: '#1e1c1a',
+    text: '#181513',
     borderTop: '#f3eee2',
-    borderBottom: '#c4b9a3',
+    borderBottom: '#7a6e5b',
     accent: '#344c39',
     ribbon: '#344c39',
     isDark: false,
+    allowedInks: ['dark-ink', 'brown-ink'],
+    defaultInk: 'dark-ink',
+    edgeBorder: '#7a6e5b',
+    edgeShadow: '0 4px 12px rgba(35, 25, 15, 0.22), 0 1px 3px rgba(35, 25, 15, 0.15)',
   },
   charcoal: {
     id: 'charcoal',
     label: 'Soft Soot',
     bg: '#2c2825',
-    text: '#f8f4ed',
+    text: '#f2d482',
     borderTop: '#423c38',
     borderBottom: '#191614',
     accent: '#c25e38',
     ribbon: '#c25e38',
     isDark: true,
+    allowedInks: ['gold-foil', 'silver-foil', 'cream-foil', 'white-foil'],
+    defaultInk: 'gold-foil',
   },
   clay: {
     id: 'clay',
     label: 'Sunbaked Clay',
     bg: '#9e563a',
-    text: '#fdf8f4',
+    text: '#fdfaf2',
     borderTop: '#b86e50',
     borderBottom: '#783e27',
     accent: '#e2a38b',
     ribbon: '#263449',
-    isDark: true,
+    isDark: false,
+    allowedInks: ['cream-foil', 'white-foil'],
+    defaultInk: 'cream-foil',
   },
   plum: {
     id: 'plum',
     label: 'Dark Plum',
     bg: '#4e2d3f',
-    text: '#fbf4f8',
+    text: '#f2d482',
     borderTop: '#684056',
     borderBottom: '#331b29',
     accent: '#9a6784',
     ribbon: '#d9822b',
     isDark: true,
+    allowedInks: ['gold-foil', 'cream-foil', 'white-foil'],
+    defaultInk: 'gold-foil',
   },
 } as const;
 
@@ -224,27 +253,38 @@ export const SPINE_FONTS = {
   'newsreader': {
     id: 'newsreader',
     label: 'Newsreader (Classic Serif)',
-    fontFamily: '"Newsreader", Georgia, Cambria, serif',
+    fontFamily: '"Newsreader", Georgia, serif',
+    letterSpacing: '0.01em',
+    fontWeight: 600,
+  },
+  'special-elite': {
+    id: 'special-elite',
+    label: 'Special Elite (Typewriter / Slab)',
+    fontFamily: '"Special Elite", monospace, serif',
+    letterSpacing: '0.04em',
+    fontWeight: 400,
   },
   'kalam': {
     id: 'kalam',
     label: 'Kalam (Handwritten)',
     fontFamily: '"Kalam", cursive, sans-serif',
-  },
-  'special-elite': {
-    id: 'special-elite',
-    label: 'Special Elite (Typewriter)',
-    fontFamily: '"Special Elite", "Courier New", monospace, serif',
+    letterSpacing: '0.01em',
+    fontWeight: 700,
   },
   'oswald': {
     id: 'oswald',
-    label: 'Oswald (Condensed)',
+    label: 'Oswald (Condensed Display)',
     fontFamily: '"Oswald", Impact, sans-serif',
+    letterSpacing: '0.05em',
+    fontWeight: 600,
+    textTransform: 'uppercase' as const,
   },
   'playfair-display': {
     id: 'playfair-display',
-    label: 'Playfair Display (Editorial)',
+    label: 'Playfair Display (High-Contrast Serif)',
     fontFamily: '"Playfair Display", Georgia, serif',
+    letterSpacing: '0.02em',
+    fontWeight: 700,
   },
 } as const;
 
@@ -252,29 +292,57 @@ export const SPINE_FINISHES = {
   'gold-foil': {
     id: 'gold-foil',
     label: 'Gold Foil',
-    textColor: '#f5d77f',
-    textShadow: '0 1px 0 rgba(255, 245, 190, 0.65), 0 -1px 0 rgba(110, 75, 15, 0.8), 0 0 4px rgba(245, 215, 127, 0.4)',
+    textColor: '#f2d482',
+    textShadow: '0 1px 0 rgba(0, 0, 0, 0.65)',
     requiresDarkBackground: true,
   },
   'silver-foil': {
     id: 'silver-foil',
     label: 'Silver Foil',
     textColor: '#e8edf2',
-    textShadow: '0 1px 0 rgba(255, 255, 255, 0.8), 0 -1px 0 rgba(50, 60, 70, 0.85), 0 0 3px rgba(220, 230, 240, 0.35)',
+    textShadow: '0 1px 0 rgba(0, 0, 0, 0.65)',
     requiresDarkBackground: true,
+  },
+  'cream-foil': {
+    id: 'cream-foil',
+    label: 'Cream Foil',
+    textColor: '#fdfaf2',
+    textShadow: '0 1px 0 rgba(0, 0, 0, 0.65)',
+    requiresDarkBackground: true,
+  },
+  'white-foil': {
+    id: 'white-foil',
+    label: 'White Foil',
+    textColor: '#ffffff',
+    textShadow: '0 1px 0 rgba(0, 0, 0, 0.65)',
+    requiresDarkBackground: true,
+  },
+  'dark-ink': {
+    id: 'dark-ink',
+    label: 'Dark Ink',
+    textColor: '#181513',
+    textShadow: '0 1px 0 rgba(255, 255, 255, 0.35)',
+    requiresDarkBackground: false,
+  },
+  'brown-ink': {
+    id: 'brown-ink',
+    label: 'Dark Brown Ink',
+    textColor: '#2c1e14',
+    textShadow: '0 1px 0 rgba(255, 255, 255, 0.25)',
+    requiresDarkBackground: false,
   },
   'white-ink': {
     id: 'white-ink',
     label: 'White Ink',
-    textColor: '#fdfbf7',
-    textShadow: '0 1px 2px rgba(20, 15, 10, 0.5), 0 -1px 0 rgba(255, 255, 255, 0.2)',
+    textColor: '#ffffff',
+    textShadow: '0 1px 0 rgba(0, 0, 0, 0.65)',
     requiresDarkBackground: true,
   },
   'black-ink': {
     id: 'black-ink',
     label: 'Black Ink',
-    textColor: '#1a1816',
-    textShadow: '0 1px 0 rgba(255, 255, 255, 0.35), 0 -1px 0 rgba(0, 0, 0, 0.2)',
+    textColor: '#181513',
+    textShadow: '0 1px 0 rgba(255, 255, 255, 0.35)',
     requiresDarkBackground: false,
   },
 } as const;
@@ -313,10 +381,22 @@ export function getContrastRatio(hex1: string, hex2: string): number {
 
 /**
  * Checks if a finish passes WCAG 4.5:1 contrast against a given background hex.
+ * Also enforces hard palette rule: never gold on light covers (linen, paper).
  */
 export function isFinishCompatible(finishId: keyof typeof SPINE_FINISHES, bgHex: string): boolean {
   const finish = SPINE_FINISHES[finishId];
   if (!finish) return false;
+
+  // Never allow gold or silver foil on light covers (luminance > 0.4)
+  const bgLum = getRelativeLuminance(bgHex);
+  if (bgLum > 0.4 && (finishId === 'gold-foil' || finishId === 'silver-foil' || finishId === 'cream-foil' || finishId === 'white-foil')) {
+    return false;
+  }
+  // Never allow dark ink on dark covers (luminance < 0.2)
+  if (bgLum < 0.2 && (finishId === 'dark-ink' || finishId === 'brown-ink')) {
+    return false;
+  }
+
   const ratio = getContrastRatio(finish.textColor, bgHex);
   return ratio >= 4.5;
 }
@@ -326,7 +406,7 @@ export const SHADOW_TOKENS = {
   tileHover: '0 6px 12px rgba(45, 35, 25, 0.06), 0 20px 36px -8px rgba(45, 35, 25, 0.14)',
   caption: '0 1px 3px rgba(35, 28, 20, 0.08), 0 3px 8px -2px rgba(35, 28, 20, 0.06)',
   toast: '0 4px 12px rgba(40, 30, 20, 0.12), 0 16px 32px -4px rgba(40, 30, 20, 0.16)',
-  bookSpine: '0 3px 8px rgba(35, 25, 15, 0.12), 0 1px 2px rgba(35, 25, 15, 0.08)',
+  bookSpine: '0 2px 6px rgba(35, 25, 15, 0.12), 0 1px 2px rgba(35, 25, 15, 0.08)',
   bookSpineHover: '0 8px 20px rgba(35, 25, 15, 0.18), 0 3px 6px rgba(35, 25, 15, 0.12)',
   stackBase: '0 12px 28px -4px rgba(35, 25, 15, 0.22), 0 4px 10px rgba(35, 25, 15, 0.12)',
   tableStrip: '0 14px 26px -4px rgba(35, 25, 15, 0.22), 0 4px 8px rgba(35, 25, 15, 0.14)',
@@ -383,11 +463,17 @@ export const STACK_CONFIG = {
   maxSpineHeightPx: 104, // Maximum spine height cap
   defaultPileSize: 10, // Entries per pile resting on a wooden table strip
   maxLightRowsCap: 500, // Light rows cap per category
-  maxTiltDegrees: 2.5, // Deterministic tilt cap per spec
-  maxOffsetPx: 16, // Max horizontal offset jitter on laptop
-  maxOffsetMobilePx: 6, // Reduced jitter on phone to prevent clipping
-  slideOffsetPx: 12, // Sideways nudge on hover/focus
   stackWidthLaptopPx: 900, // Stack width on laptop
+  minBookLengthLaptopPx: 520, // Length: 520 to 780 px on laptop
+  maxBookLengthLaptopPx: 780,
+  maxOffsetLaptopPx: 120, // Horizontal offset up to 120 px
+  maxTiltDegrees: 1.2, // Max tilt +/- 1.2 deg
+  maxDriftPx: 6.0, // |tilt in radians * length / 2| <= 6 px
+  maxAdjacentSameLeanDegrees: 0.8, // Adjacent books may not both lean the same way past 0.8 deg
+  minAdjacentLengthDiffPx: 40, // Adjacent books differ in length by at least 40 px
+  minTitleFontSizePx: 18, // Font size scales with thickness: 18 to 30 px
+  maxTitleFontSizePx: 30,
+  slideOffsetPx: 12, // Sideways nudge on hover/focus
   detailsCardDelayMs: 250, // Hover delay for details card
 } as const;
 

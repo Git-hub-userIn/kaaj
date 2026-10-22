@@ -9,6 +9,7 @@ import '@fontsource/oswald/400.css';
 import '@fontsource/oswald/600.css';
 import '@fontsource/playfair-display/400.css';
 import '@fontsource/playfair-display/600.css';
+import '@fontsource/playfair-display/700.css';
 
 import { HomeScreen } from './features/home/HomeScreen.js';
 import { CategoryStackScreen } from './features/category/CategoryStackScreen.js';
