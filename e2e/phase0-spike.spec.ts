@@ -12,7 +12,7 @@ test.describe('Phase 0 Spike Verification', () => {
   });
 
   test('2. Canvas renders fixed 3:4 aspect ratio and scales responsively', async ({ page }) => {
-    await page.goto('http://localhost:3000');
+    await page.goto('http://localhost:3000/spike');
     const canvasPage = page.locator('[data-testid="canvas-page"]');
     await expect(canvasPage).toBeVisible();
 
@@ -36,7 +36,7 @@ test.describe('Phase 0 Spike Verification', () => {
   });
 
   test('3. Rich text editor allows typing within canvas', async ({ page }) => {
-    await page.goto('http://localhost:3000');
+    await page.goto('http://localhost:3000/spike');
     const editor = page.locator('.ProseMirror');
     await expect(editor).toBeVisible();
 
@@ -49,7 +49,7 @@ test.describe('Phase 0 Spike Verification', () => {
   });
 
   test('4. Freeform overlay layer supports pointer dragging and transforms', async ({ page }) => {
-    await page.goto('http://localhost:3000');
+    await page.goto('http://localhost:3000/spike');
     const sticker = page.locator('[data-testid="layer-object-obj_sticker_1"]');
     await expect(sticker).toBeVisible();
 
@@ -73,7 +73,7 @@ test.describe('Phase 0 Spike Verification', () => {
   });
 
   test('5. 200 objects drag benchmark operates smoothly', async ({ page }) => {
-    await page.goto('http://localhost:3000');
+    await page.goto('http://localhost:3000/spike');
     const toggleBtn = page.locator('[data-testid="toggle-benchmark-btn"]');
     await toggleBtn.click();
 
@@ -131,7 +131,7 @@ test.describe('Phase 0 Spike Verification', () => {
     expect(thumbRes.headers()['content-type']).toBe('image/webp');
 
     // UI Save and Reload test
-    await page.goto('http://localhost:3000');
+    await page.goto('http://localhost:3000/spike');
     const saveBtn = page.locator('[data-testid="save-btn"]');
     const reloadBtn = page.locator('[data-testid="reload-btn"]');
     const saveStatus = page.locator('[data-testid="save-status"]');

@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" width="800" height="1000">
+  <defs>
+    <radialGradient id="citrus-glow" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#f5b842" />
+      <stop offset="100%" stop-color="#d9822b" />
+    </radialGradient>
+  </defs>
+
+  <!-- Background Warm Saffron Cream -->
+  <rect width="800" height="1000" fill="#faf2e3"/>
+
+  <!-- Botanical Herb Sprig -->
+  <g transform="translate(580, 260) rotate(32)" opacity="0.85">
+    <path d="M0,0 Q60,180 140,360" fill="none" stroke="#445846" stroke-width="5" stroke-linecap="round"/>
+    <ellipse cx="25" cy="60" rx="28" ry="12" fill="#586e5b" transform="rotate(-30 25 60)"/>
+    <ellipse cx="65" cy="130" rx="32" ry="14" fill="#445846" transform="rotate(35 65 130)"/>
+    <ellipse cx="60" cy="200" rx="30" ry="12" fill="#586e5b" transform="rotate(-25 60 200)"/>
+    <ellipse cx="105" cy="270" rx="34" ry="14" fill="#445846" transform="rotate(40 105 270)"/>
+    <ellipse cx="140" cy="355" rx="36" ry="15" fill="#364938" transform="rotate(20 140 355)"/>
+  </g>
+
+  <!-- Clay Mortar & Bowl Composition -->
+  <circle cx="280" cy="620" r="220" fill="#c25e38" />
+  <circle cx="280" cy="620" r="190" fill="#a44826" />
+  <circle cx="280" cy="620" r="150" fill="#8c3a1d" />
+
+  <!-- Citrus Slice Cutout -->
+  <circle cx="540" cy="740" r="120" fill="url(#citrus-glow)" />
+  <circle cx="540" cy="740" r="105" fill="#fff9ed" opacity="0.9" />
+  <g transform="translate(540, 740)" fill="#d9822b" opacity="0.95">
+    <path d="M0,0 L20,-90 A92,92 0 0,0 -20,-90 Z"/>
+    <path d="M0,0 L85,-35 A92,92 0 0,0 70,-65 Z"/>
+    <path d="M0,0 L85,35 A92,92 0 0,0 85,-35 Z"/>
+    <path d="M0,0 L20,90 A92,92 0 0,0 70,65 Z"/>
+    <path d="M0,0 L-20,90 A92,92 0 0,0 20,90 Z"/>
+    <path d="M0,0 L-85,35 A92,92 0 0,0 -20,90 Z"/>
+    <path d="M0,0 L-85,-35 A92,92 0 0,0 -85,35 Z"/>
+    <path d="M0,0 L-20,-90 A92,92 0 0,0 -70,-65 Z"/>
+  </g>
+
+  <!-- Recipe Index Lines -->
+  <line x1="120" y1="200" x2="340" y2="200" stroke="#bda58c" stroke-width="3" stroke-linecap="round"/>
+  <line x1="120" y1="230" x2="280" y2="230" stroke="#bda58c" stroke-width="3" stroke-linecap="round"/>
+  <line x1="120" y1="260" x2="310" y2="260" stroke="#bda58c" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Border -->
+  <rect x="25" y="25" width="750" height="950" fill="none" stroke="#e0d1bc" stroke-width="2"/>
+</svg>

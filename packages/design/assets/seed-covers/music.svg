@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" width="800" height="1000">
+  <defs>
+    <radialGradient id="vinyl-center" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e8a855" />
+      <stop offset="100%" stop-color="#b86d25" />
+    </radialGradient>
+  </defs>
+
+  <!-- Deep Dusk Indigo Canvas -->
+  <rect width="800" height="1000" fill="#242c38"/>
+
+  <!-- Large Vinyl Disc Segment -->
+  <g transform="translate(400, 520)">
+    <!-- Outer grooves -->
+    <circle cx="0" cy="0" r="340" fill="#181d24" stroke="#2f3a48" stroke-width="3"/>
+    <circle cx="0" cy="0" r="310" fill="none" stroke="#262f3a" stroke-width="2"/>
+    <circle cx="0" cy="0" r="280" fill="none" stroke="#2d3744" stroke-width="1.5"/>
+    <circle cx="0" cy="0" r="250" fill="none" stroke="#262f3a" stroke-width="2"/>
+    <circle cx="0" cy="0" r="220" fill="none" stroke="#2d3744" stroke-width="1.5"/>
+    <circle cx="0" cy="0" r="190" fill="none" stroke="#262f3a" stroke-width="2"/>
+
+    <!-- Center Label -->
+    <circle cx="0" cy="0" r="130" fill="url(#vinyl-center)"/>
+    <circle cx="0" cy="0" r="115" fill="#f4ebd9" opacity="0.95"/>
+    <circle cx="0" cy="0" r="24" fill="#181d24"/>
+  </g>
+
+  <!-- Acoustic Wave Sine Ribbons -->
+  <path d="M60,180 Q220,80 400,180 T740,180" fill="none" stroke="#d9822b" stroke-width="6" stroke-linecap="round" opacity="0.85"/>
+  <path d="M60,230 Q220,130 400,230 T740,230" fill="none" stroke="#e3a763" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+  <path d="M60,860 Q220,760 400,860 T740,860" fill="none" stroke="#475b63" stroke-width="5" stroke-linecap="round" opacity="0.75"/>
+
+  <!-- Minimal Notation Dots -->
+  <circle cx="200" cy="180" r="10" fill="#f4ebd9"/>
+  <circle cx="480" cy="230" r="8" fill="#f4ebd9"/>
+  <circle cx="620" cy="150" r="12" fill="#d9822b"/>
+
+  <!-- Border -->
+  <rect x="25" y="25" width="750" height="950" fill="none" stroke="#3b4858" stroke-width="2"/>
+</svg>

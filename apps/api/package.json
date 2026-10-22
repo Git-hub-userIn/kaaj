@@ -12,6 +12,7 @@
   "dependencies": {
     "@hono/node-server": "^1.13.8",
     "@hono/zod-validator": "^0.4.3",
+    "@kaaj/design": "workspace:*",
     "@kaaj/doc-model": "workspace:*",
     "hono": "^4.7.4",
     "sharp": "^0.33.5",

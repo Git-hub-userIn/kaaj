@@ -92,6 +92,25 @@ export type RichTextBody = z.infer<typeof RichTextBodySchema>;
 export type Page = z.infer<typeof PageSchema>;
 export type DocumentEnvelope = z.infer<typeof DocumentEnvelopeSchema>;
 
+export const CategorySchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1).max(100),
+  description: z.string().optional(),
+  coverAssetId: z.string().optional(),
+  sortOrder: z.number().int().default(0),
+  color: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  deletedAt: z.string().nullable().optional(),
+});
+
+export const CategoryLightRowSchema = CategorySchema.extend({
+  entryCount: z.number().int().default(0),
+});
+
+export type Category = z.infer<typeof CategorySchema>;
+export type CategoryLightRow = z.infer<typeof CategoryLightRowSchema>;
+
 /**
  * Pure weight function.
  * Calculates entry weight from character count, image count, and layer object count.

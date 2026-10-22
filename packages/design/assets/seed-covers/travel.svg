@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" width="800" height="1000">
+  <defs>
+    <radialGradient id="sun-glow" cx="70%" cy="30%" r="50%">
+      <stop offset="0%" stop-color="#e27d5f" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#c25e38" stop-opacity="1" />
+    </radialGradient>
+    <linearGradient id="sand-dune" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#edd9bf" />
+      <stop offset="100%" stop-color="#dfc5a6" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background Linen -->
+  <rect width="800" height="1000" fill="#f5ede0"/>
+
+  <!-- Sun Disc -->
+  <circle cx="560" cy="280" r="140" fill="url(#sun-glow)" />
+
+  <!-- Topographic Contour Lines -->
+  <path d="M-50,420 Q180,360 400,430 T850,380" fill="none" stroke="#b59f84" stroke-width="2" stroke-dasharray="6,8" opacity="0.7"/>
+  <path d="M-50,480 Q200,410 420,490 T850,440" fill="none" stroke="#b59f84" stroke-width="2" stroke-dasharray="4,6" opacity="0.6"/>
+  <path d="M-50,540 Q220,470 440,550 T850,500" fill="none" stroke="#b59f84" stroke-width="2" stroke-dasharray="6,8" opacity="0.5"/>
+
+  <!-- Mountain Silhouettes -->
+  <path d="M0,740 L180,520 L360,760 L540,460 L800,800 L800,1000 L0,1000 Z" fill="#506654" opacity="0.9"/>
+  <path d="M120,780 L290,610 L440,800 L620,540 L800,770 L800,1000 L120,1000 Z" fill="#3b4d3f" opacity="0.95"/>
+
+  <!-- Foreground Dune Cutout -->
+  <path d="M-40,850 Q280,680 840,880 L840,1000 L-40,1000 Z" fill="url(#sand-dune)"/>
+
+  <!-- Stamp & Compass Motif -->
+  <g transform="translate(140, 220) rotate(-12)" opacity="0.85">
+    <circle cx="0" cy="0" r="60" fill="none" stroke="#c25e38" stroke-width="3"/>
+    <circle cx="0" cy="0" r="50" fill="none" stroke="#c25e38" stroke-width="1.5" stroke-dasharray="4,4"/>
+    <polygon points="0,-42 12,0 0,42 -12,0" fill="#c25e38"/>
+    <polygon points="-42,0 0,12 42,0 0,-12" fill="#8c3e21" opacity="0.6"/>
+  </g>
+
+  <!-- Fine Border Deckle -->
+  <rect x="20" y="20" width="760" height="960" fill="none" stroke="#d5c4ab" stroke-width="1.5" opacity="0.5"/>
+</svg>

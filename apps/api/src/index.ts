@@ -2,9 +2,11 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { cors } from 'hono/cors';
 import path from 'node:path';
+import fsSync from 'node:fs';
 import { LocalDiskAssetStore } from './stores/asset-store.js';
 import { DocumentEnvelopeSchema, calculateWeight } from '@kaaj/doc-model';
 import { renderDocumentToPdf } from './services/pdf-service.js';
+import { CategoriesService } from './services/categories-service.js';
 import { authGuard } from './auth/guard.js';
 
 const app = new Hono();
@@ -12,8 +14,25 @@ const app = new Hono();
 app.use('*', cors());
 app.use('*', authGuard);
 
-const storageDir = path.resolve(process.cwd(), 'data', 'storage');
+// Locate repository root reliably
+function findRepoRoot(startDir: string): string {
+  let curr = path.resolve(startDir);
+  while (curr !== path.dirname(curr)) {
+    if (fsSync.existsSync(path.join(curr, 'package.json')) && fsSync.existsSync(path.join(curr, 'packages'))) {
+      return curr;
+    }
+    curr = path.dirname(curr);
+  }
+  return startDir;
+}
+
+const repoRoot = findRepoRoot(process.cwd());
+const storageDir = path.resolve(repoRoot, 'data', 'storage');
+const baseDataDir = path.resolve(repoRoot, 'data');
+const seedCoversDir = path.resolve(repoRoot, 'packages', 'design', 'assets', 'seed-covers');
+
 const assetStore = new LocalDiskAssetStore(storageDir);
+const categoriesService = new CategoriesService(baseDataDir, assetStore, seedCoversDir);
 
 // In-memory / local mock store for Phase 0 spike entry documents
 const entryStore = new Map<string, { doc: unknown; version: number; weight: number }>();
@@ -28,6 +47,67 @@ app.get('/health', (c) => {
   });
 });
 
+// Category Endpoints
+app.get('/categories', async (c) => {
+  const categories = await categoriesService.listCategories();
+  return c.json(categories);
+});
+
+app.get('/categories/:id', async (c) => {
+  const id = c.req.param('id');
+  const result = await categoriesService.getCategory(id);
+  if (!result) {
+    return c.json({ error: 'Category not found' }, 404);
+  }
+  return c.json(result);
+});
+
+app.post('/categories', async (c) => {
+  try {
+    const body = await c.req.json();
+    if (!body.title || typeof body.title !== 'string' || !body.title.trim()) {
+      return c.json({ error: 'Title is required' }, 400);
+    }
+    const category = await categoriesService.createCategory(body.title, body.coverAssetId, body.color);
+    return c.json(category, 201);
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to create category' }, 422);
+  }
+});
+
+app.patch('/categories/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const body = await c.req.json();
+    const updated = await categoriesService.updateCategory(id, body);
+    if (!updated) {
+      return c.json({ error: 'Category not found' }, 404);
+    }
+    return c.json(updated);
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to update category' }, 422);
+  }
+});
+
+app.delete('/categories/:id', async (c) => {
+  const id = c.req.param('id');
+  const deleted = await categoriesService.deleteCategory(id);
+  if (!deleted) {
+    return c.json({ error: 'Category not found' }, 404);
+  }
+  return c.json({ success: true, id });
+});
+
+app.post('/categories/:id/restore', async (c) => {
+  const id = c.req.param('id');
+  const restored = await categoriesService.restoreCategory(id);
+  if (!restored) {
+    return c.json({ error: 'Category not found or not deleted' }, 404);
+  }
+  return c.json(restored);
+});
+
+// Asset Endpoints
 app.post('/assets', async (c) => {
   try {
     const formData = await c.req.formData();
@@ -84,7 +164,10 @@ app.get('/assets/:id/thumb', async (c) => {
   }
 
   return new Response(new Uint8Array(data), {
-    headers: { 'Content-Type': 'image/webp' },
+    headers: {
+      'Content-Type': 'image/webp',
+      'Cache-Control': 'public, max-age=31536000, immutable',
+    },
   });
 });
 

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" width="800" height="1000">
+  <!-- Soft Botanical Parchment -->
+  <rect width="800" height="1000" fill="#f2efe4"/>
+
+  <!-- Terracotta Planter Silhouette -->
+  <polygon points="260,780 540,780 500,960 300,960" fill="#c25e38"/>
+  <rect x="230" y="750" width="340" height="34" rx="4" fill="#a84e2c"/>
+
+  <!-- Large Monstera / Palm Frond Silhouettes -->
+  <!-- Stem 1 -->
+  <path d="M380,750 Q300,500 180,240" fill="none" stroke="#2e4233" stroke-width="6" stroke-linecap="round"/>
+  <!-- Leaf 1 leaves -->
+  <ellipse cx="230" cy="340" rx="90" ry="42" fill="#425c48" transform="rotate(-35 230 340)"/>
+  <ellipse cx="280" cy="450" rx="100" ry="46" fill="#506654" transform="rotate(-25 280 450)"/>
+  <ellipse cx="320" cy="570" rx="110" ry="48" fill="#364d3c" transform="rotate(-15 320 570)"/>
+
+  <!-- Stem 2 -->
+  <path d="M420,750 Q480,480 620,200" fill="none" stroke="#2e4233" stroke-width="6" stroke-linecap="round"/>
+  <!-- Leaf 2 leaves -->
+  <ellipse cx="560" cy="310" rx="95" ry="44" fill="#506654" transform="rotate(40 560 310)"/>
+  <ellipse cx="510" cy="430" rx="105" ry="46" fill="#3a5240" transform="rotate(30 510 430)"/>
+  <ellipse cx="460" cy="560" rx="110" ry="48" fill="#425c48" transform="rotate(18 460 560)"/>
+
+  <!-- Central Tall Sprout -->
+  <path d="M400,750 Q400,380 400,140" fill="none" stroke="#243428" stroke-width="5" stroke-linecap="round"/>
+  <ellipse cx="400" cy="130" rx="36" ry="70" fill="#5c7a63"/>
+
+  <!-- Floating Pressed Foliage Stamp -->
+  <g transform="translate(640, 780) rotate(-15)" opacity="0.65">
+    <circle cx="0" cy="0" r="50" fill="none" stroke="#506654" stroke-width="2" stroke-dasharray="4,4"/>
+    <text x="0" y="8" font-family="serif" font-size="20" fill="#506654" text-anchor="middle">HERBARIUM</text>
+  </g>
+
+  <!-- Border -->
+  <rect x="25" y="25" width="750" height="950" fill="none" stroke="#d5d0be" stroke-width="2"/>
+</svg>

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" width="800" height="1000">
+  <defs>
+    <linearGradient id="polaroid-tint" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fffdfa" />
+      <stop offset="100%" stop-color="#f5ede0" />
+    </linearGradient>
+  </defs>
+
+  <!-- Antique Rose Parchment -->
+  <rect width="800" height="1000" fill="#f7f0ea"/>
+
+  <!-- Vintage Photo Frame / Polaroid Cutout -->
+  <g transform="translate(140, 160) rotate(-4)">
+    <!-- Photo Shadow -->
+    <rect x="6" y="8" width="500" height="580" rx="4" fill="#3a2e26" opacity="0.12"/>
+    <!-- Photo Paper Border -->
+    <rect x="0" y="0" width="500" height="580" rx="4" fill="url(#polaroid-tint)" stroke="#e4d8c5" stroke-width="2"/>
+    <!-- Inner Sepia Image Window -->
+    <rect x="36" y="36" width="428" height="428" rx="2" fill="#58483e"/>
+    <!-- Distant Sea and Sky Horizon in Photo -->
+    <rect x="36" y="36" width="428" height="230" fill="#938479" opacity="0.6"/>
+    <ellipse cx="250" cy="266" rx="90" ry="90" fill="#dfbe99" opacity="0.8"/>
+    <path d="M36,266 Q160,250 250,266 T464,260 L464,464 L36,464 Z" fill="#3e322b"/>
+
+    <!-- Archival Date Stamp on Photo Chin -->
+    <text x="50" y="525" font-family="monospace" font-size="22" fill="#8c7768" letter-spacing="4">1998.08.14</text>
+  </g>
+
+  <!-- Pressed Flower Bloom Overlapping Frame -->
+  <g transform="translate(540, 680) rotate(18)" opacity="0.85">
+    <ellipse cx="0" cy="-60" rx="26" ry="60" fill="#b37367"/>
+    <ellipse cx="50" cy="-30" rx="26" ry="60" fill="#b37367" transform="rotate(60 50 -30)"/>
+    <ellipse cx="50" cy="30" rx="26" ry="60" fill="#b37367" transform="rotate(120 50 30)"/>
+    <ellipse cx="0" cy="60" rx="26" ry="60" fill="#b37367"/>
+    <ellipse cx="-50" cy="30" rx="26" ry="60" fill="#b37367" transform="rotate(-120 -50 30)"/>
+    <ellipse cx="-50" cy="-30" rx="26" ry="60" fill="#b37367" transform="rotate(-60 -50 -30)"/>
+    <circle cx="0" cy="0" r="28" fill="#dca142"/>
+  </g>
+
+  <!-- Archival Postmark Stamp -->
+  <g transform="translate(200, 840) rotate(-8)" opacity="0.5">
+    <circle cx="0" cy="0" r="55" fill="none" stroke="#68564b" stroke-width="2.5"/>
+    <circle cx="0" cy="0" r="46" fill="none" stroke="#68564b" stroke-width="1.5" stroke-dasharray="3,3"/>
+    <text x="0" y="6" font-family="serif" font-size="16" fill="#68564b" text-anchor="middle" font-weight="bold">ARCHIVE</text>
+  </g>
+
+  <!-- Border -->
+  <rect x="25" y="25" width="750" height="950" fill="none" stroke="#ded4c3" stroke-width="2"/>
+</svg>

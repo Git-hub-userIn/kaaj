@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" width="800" height="1000">
+  <!-- Raw Cartridge Paper -->
+  <rect width="800" height="1000" fill="#f4f1ea"/>
+
+  <!-- Charcoal Wash Block -->
+  <path d="M120,160 Q340,110 680,180 L620,520 Q410,480 180,560 Z" fill="#2b2825" opacity="0.9"/>
+
+  <!-- Raw Linen Diagonal Strip -->
+  <polygon points="80,590 720,410 750,560 110,740" fill="#ded4c1" opacity="0.8"/>
+
+  <!-- Terracotta Gestural Arc -->
+  <path d="M160,780 Q400,320 640,680" fill="none" stroke="#c25e38" stroke-width="28" stroke-linecap="round" opacity="0.9"/>
+
+  <!-- Fine Draughtsman Lines -->
+  <line x1="80" y1="280" x2="720" y2="280" stroke="#756f67" stroke-width="1.5" stroke-dasharray="12,8"/>
+  <line x1="380" y1="80" x2="380" y2="920" stroke="#756f67" stroke-width="1.5" stroke-dasharray="12,8"/>
+
+  <!-- Golden Spiral Geometric Guide -->
+  <path d="M380,280 A180,180 0 0,1 560,460 A110,110 0 0,1 450,570 A70,70 0 0,1 380,500" fill="none" stroke="#9e9487" stroke-width="2"/>
+
+  <!-- Graphite Crosshatch Block -->
+  <g stroke="#3a3632" stroke-width="2" opacity="0.4">
+    <line x1="220" y1="360" x2="320" y2="460"/>
+    <line x1="240" y1="360" x2="340" y2="460"/>
+    <line x1="260" y1="360" x2="360" y2="460"/>
+    <line x1="280" y1="360" x2="380" y2="460"/>
+    <line x1="300" y1="360" x2="400" y2="460"/>
+  </g>
+
+  <!-- Framing Border -->
+  <rect x="25" y="25" width="750" height="950" fill="none" stroke="#d6cfbe" stroke-width="2"/>
+</svg>

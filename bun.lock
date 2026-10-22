@@ -4,6 +4,10 @@
   "workspaces": {
     "": {
       "name": "kaaj-monorepo",
+      "dependencies": {
+        "@fontsource/kalam": "^5.3.0",
+        "@fontsource/newsreader": "^5.3.0",
+      },
       "devDependencies": {
         "typescript": "^5.7.3",
       },
@@ -14,6 +18,7 @@
       "dependencies": {
         "@hono/node-server": "^1.13.8",
         "@hono/zod-validator": "^0.4.3",
+        "@kaaj/design": "workspace:*",
         "@kaaj/doc-model": "workspace:*",
         "hono": "^4.7.4",
         "sharp": "^0.33.5",
@@ -30,6 +35,8 @@
       "name": "@kaaj/web",
       "version": "0.1.0",
       "dependencies": {
+        "@fontsource/kalam": "^5.3.0",
+        "@fontsource/newsreader": "^5.3.0",
         "@kaaj/design": "workspace:*",
         "@kaaj/doc-model": "workspace:*",
         "@tiptap/core": "^2.11.5",
@@ -170,6 +177,10 @@
     "@esbuild/win32-ia32": ["@esbuild/win32-ia32@0.28.2", "", { "os": "win32", "cpu": "ia32" }, "sha512-YmJbfTlvU7Sdn9BB+4PRES4oB6pxgS37MAONj+hBr/cpXS1aBPKXxNnDbu+QCWPj0o9dgyxeq79g6c5P8KeuYA=="],
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.28.2", "", { "os": "win32", "cpu": "x64" }, "sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g=="],
+
+    "@fontsource/kalam": ["@fontsource/kalam@5.3.0", "", {}, "sha512-FDkVoDfPDCSN/eO81FOYtUI67eMgpVBJmjBtAqSL0PmEhJyeFY2biC+CR+yEttksgXR9+swpFdYmQTyjwBq80Q=="],
+
+    "@fontsource/newsreader": ["@fontsource/newsreader@5.3.0", "", {}, "sha512-AFR6ZKY89GNL+9qBI2P2+66NhD5bhOj/v6fsLnFYLM4E0JnMB1yKb+Ro8cA64i1hwAWoBfTq5CHJGWH1toLDkw=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.17", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ=="],
 
