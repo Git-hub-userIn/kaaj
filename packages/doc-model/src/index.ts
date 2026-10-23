@@ -96,6 +96,31 @@ export type RichTextBody = z.infer<typeof RichTextBodySchema>;
 export type Page = z.infer<typeof PageSchema>;
 export type DocumentEnvelope = z.infer<typeof DocumentEnvelopeSchema>;
 
+export const TodoItemSchema = z.object({
+  id: z.string().min(1),
+  text: z.string().max(200),
+  done: z.boolean().default(false),
+});
+
+export const MonthEntryCountSchema = z.object({
+  month: z.string(),
+  label: z.string(),
+  count: z.number().int().default(0),
+});
+
+export const CategoryStatsSchema = z.object({
+  entries: z.number().int().default(0),
+  words: z.number().int().default(0),
+  images: z.number().int().default(0),
+  createdAt: z.string(),
+  lastEditedAt: z.string().nullable().optional(),
+  entriesPerMonth: z.array(MonthEntryCountSchema).default([]),
+});
+
+export type TodoItem = z.infer<typeof TodoItemSchema>;
+export type MonthEntryCount = z.infer<typeof MonthEntryCountSchema>;
+export type CategoryStats = z.infer<typeof CategoryStatsSchema>;
+
 export const CategorySchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1).max(100),
@@ -103,6 +128,8 @@ export const CategorySchema = z.object({
   coverAssetId: z.string().optional(),
   sortOrder: z.number().int().default(0),
   color: z.string().optional(),
+  todo: z.array(TodoItemSchema).max(12).default([]),
+  version: z.number().int().default(1),
   createdAt: z.string(),
   updatedAt: z.string(),
   deletedAt: z.string().nullable().optional(),

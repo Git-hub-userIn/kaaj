@@ -5,6 +5,9 @@ import { EmptyBlankBook } from './EmptyBlankBook.js';
 import { StackSkeleton } from './StackSkeleton.js';
 import { SpineCustomizerModal } from './SpineCustomizerModal.js';
 import { UndoToast } from '../home/UndoToast.js';
+import { CategoryLeftRail } from './CategoryLeftRail.js';
+import { CategoryRightRail } from './CategoryRightRail.js';
+import { CompactJumpToMenu } from './CompactJumpToMenu.js';
 import {
   COLOR_TOKENS,
   TYPOGRAPHY_TOKENS,
@@ -13,8 +16,9 @@ import {
   SHADOW_TOKENS,
   STACK_CONFIG,
   COPY,
+  SEED_COVERS_MANIFEST,
 } from '@kaaj/design';
-import type { Category, CategoryLightRow, EntryLightRow, SpineStyle } from '@kaaj/doc-model';
+import type { Category, CategoryLightRow, EntryLightRow, SpineStyle, CategoryStats } from '@kaaj/doc-model';
 import { getPileLabel, computePileGeometries } from './stack-utils.js';
 import { RiAddLine, RiArrowLeftLine, RiAlertLine } from '@remixicon/react';
 
@@ -32,6 +36,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
   onNavigateToEntry,
 }) => {
   const [category, setCategory] = useState<Category | null>(null);
+  const [stats, setStats] = useState<CategoryStats | null>(null);
   const [allCategories, setAllCategories] = useState<CategoryLightRow[]>([]);
   const [entries, setEntries] = useState<EntryLightRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,6 +61,41 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
   // Sticky slim bar visibility state
   const [showStickyBar, setShowStickyBar] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
+
+  // Viewport width for responsive rails and details mode
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1440
+  );
+
+  useEffect(() => {
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const isWideScreen = viewportWidth >= 1280;
+  const isMediumScreen = viewportWidth >= 1024 && viewportWidth < 1280;
+
+  // Active entry for sticky Details panel (>= 1280px)
+  const [activeEntry, setActiveEntry] = useState<EntryLightRow | null>(null);
+
+  // Default to first entry once loaded; never empty
+  useEffect(() => {
+    if (entries.length > 0 && !activeEntry) {
+      setActiveEntry(entries[0]);
+    }
+  }, [entries, activeEntry]);
+
+  const handleBookHover = useCallback((entry: EntryLightRow) => {
+    setActiveEntry(entry);
+  }, []);
+
+  const handleBookFocus = useCallback((entry: EntryLightRow) => {
+    setActiveEntry(entry);
+  }, []);
+
+  // Active pile index for "Jump to" highlight via IntersectionObserver
+  const [activePileIdx, setActivePileIdx] = useState(0);
 
   // Sync sort param from URL popstate
   useEffect(() => {
@@ -89,10 +129,11 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     try {
       const headers = { Authorization: 'Bearer kaaj-local-dev-token' };
 
-      const [catRes, entriesRes, allCatsRes] = await Promise.all([
+      const [catRes, entriesRes, allCatsRes, statsRes] = await Promise.all([
         fetch(`http://localhost:3001/categories/${categoryId}`, { headers }),
         fetch(`http://localhost:3001/categories/${categoryId}/entries`, { headers }),
         fetch('http://localhost:3001/categories', { headers }),
+        fetch(`http://localhost:3001/categories/${categoryId}/stats`, { headers }),
       ]);
 
       if (!catRes.ok) {
@@ -102,16 +143,71 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
       const catData = await catRes.json();
       const entriesData = entriesRes.ok ? await entriesRes.json() : [];
       const allCatsData = allCatsRes.ok ? await allCatsRes.json() : [];
+      const statsData = statsRes.ok ? await statsRes.json() : null;
 
       setCategory(catData);
       setEntries(entriesData);
       setAllCategories(allCatsData);
+      setStats(statsData);
     } catch (err: any) {
       setError(err.message || COPY.loadError);
     } finally {
       setLoading(false);
     }
   }, [categoryId]);
+
+  // Map of seed covers manifest key -> coverAssetId
+  const availableCoverAssetMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const cat of allCategories) {
+      if (cat.coverAssetId) {
+        for (const item of SEED_COVERS_MANIFEST) {
+          if (cat.id.includes(item.key) || cat.title.toLowerCase() === item.categoryTitle.toLowerCase()) {
+            map[item.key] = cat.coverAssetId;
+          }
+        }
+      }
+    }
+    return map;
+  }, [allCategories]);
+
+  // Update category handler with If-Match version optimistic concurrency
+  const handleUpdateCategory = useCallback(
+    async (updates: Partial<Category>): Promise<boolean> => {
+      if (!category) return false;
+      try {
+        const res = await fetch(`http://localhost:3001/categories/${category.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer kaaj-local-dev-token',
+            'If-Match': `"${category.version}"`,
+          },
+          body: JSON.stringify(updates),
+        });
+
+        if (res.status === 409) {
+          await loadData();
+          return false;
+        }
+
+        if (!res.ok) {
+          throw new Error('Failed to update catalogue');
+        }
+
+        const updatedCat = await res.json();
+        setCategory(updatedCat);
+        setAllCategories((prev) =>
+          prev.map((c) => (c.id === updatedCat.id ? { ...c, ...updatedCat } : c))
+        );
+        return true;
+      } catch (err) {
+        console.error('Update category failed:', err);
+        return false;
+      }
+    },
+    [category, loadData]
+  );
 
   useEffect(() => {
     loadData();
@@ -361,6 +457,51 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     return pileChunks;
   }, [entries, currentSort]);
 
+  // Highlight pile in view using IntersectionObserver
+  useEffect(() => {
+    if (piles.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (obsEntries) => {
+        for (const entry of obsEntries) {
+          if (entry.isIntersecting) {
+            const id = entry.target.getAttribute('id');
+            if (id && id.startsWith('stack-pile-')) {
+              const idx = parseInt(id.replace('stack-pile-', ''), 10);
+              if (!isNaN(idx)) {
+                setActivePileIdx(idx);
+              }
+            }
+          }
+        }
+      },
+      {
+        rootMargin: '-80px 0px -50% 0px',
+        threshold: [0, 0.2, 0.5],
+      }
+    );
+
+    piles.forEach((_, idx) => {
+      const el = document.getElementById(`stack-pile-${idx}`);
+      if (el) observer.observe(el);
+    });
+
+    return () => observer.disconnect();
+  }, [piles]);
+
+  const handleSelectPile = useCallback((pileIdx: number) => {
+    setActivePileIdx(pileIdx);
+    const target = document.getElementById(`pile-heading-${pileIdx}`);
+    if (target) {
+      const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      target.scrollIntoView({
+        behavior: prefersReducedMotion ? 'instant' : 'smooth',
+        block: 'start',
+      });
+      target.focus();
+    }
+  }, []);
+
   const isCapped = entries.length >= STACK_CONFIG.maxLightRowsCap;
 
   return (
@@ -464,18 +605,27 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
       <main
         style={{
           flex: 1,
-          maxWidth: '1040px',
-          margin: '0 auto',
-          padding: `${SPACING_TOKENS.lg} ${SPACING_TOKENS.xl} ${SPACING_TOKENS.xxxl}`,
           width: '100%',
+          margin: '0 auto',
+          padding: `${SPACING_TOKENS.lg} 0 ${SPACING_TOKENS.xxxl}`,
           boxSizing: 'border-box',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
+          overflow: 'visible',
         }}
       >
         {/* Back Link */}
-        <div style={{ width: '100%', maxWidth: `${STACK_CONFIG.stackWidthLaptopPx}px`, marginBottom: SPACING_TOKENS.sm }}>
+        <div
+          style={{
+            width: '100%',
+            maxWidth: isWideScreen ? '1440px' : '900px',
+            margin: '0 auto',
+            padding: `0 ${SPACING_TOKENS.xl}`,
+            marginBottom: SPACING_TOKENS.sm,
+            boxSizing: 'border-box',
+          }}
+        >
           <button
             type="button"
             data-testid="back-to-catalogues-link"
@@ -495,7 +645,6 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
               transition: 'color 150ms ease-out',
             }}
           >
-            <RiArrowLeftLine size={16} />
             {COPY.backToCatalogues}
           </button>
         </div>
@@ -505,15 +654,16 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
           ref={headerRef}
           style={{
             width: '100%',
-            maxWidth: `${STACK_CONFIG.stackWidthLaptopPx}px`,
+            maxWidth: isWideScreen ? '1440px' : '900px',
+            margin: '0 auto',
             display: 'flex',
             flexWrap: 'wrap',
             alignItems: 'flex-end',
             justifyContent: 'space-between',
             gap: SPACING_TOKENS.md,
-            marginBottom: SPACING_TOKENS.xl,
-            paddingBottom: SPACING_TOKENS.md,
+            padding: `0 ${SPACING_TOKENS.xl} ${SPACING_TOKENS.md}`,
             borderBottom: `1px solid ${COLOR_TOKENS.borderSubtle}`,
+            boxSizing: 'border-box',
           }}
         >
           {/* Title and Entry Count */}
@@ -544,12 +694,12 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
             </span>
           </div>
 
-          {/* Primary Action and Quiet Sort Control */}
+          {/* Primary Action, Quiet Sort Control, and Compact Jump To (1024-1279px) */}
           <div
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: SPACING_TOKENS.lg,
+              gap: SPACING_TOKENS.sm,
               flexWrap: 'wrap',
             }}
           >
@@ -599,6 +749,15 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
               })}
             </div>
 
+            {/* Compact Jump to Menu (1024px to 1279px only) */}
+            {isMediumScreen && piles.length > 1 && (
+              <CompactJumpToMenu
+                piles={piles}
+                currentSort={currentSort}
+                onSelectPile={handleSelectPile}
+              />
+            )}
+
             {/* Primary Action: New Entry */}
             <button
               type="button"
@@ -633,179 +792,274 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
             data-testid="stack-cap-note"
             style={{
               width: '100%',
-              maxWidth: `${STACK_CONFIG.stackWidthLaptopPx}px`,
+              maxWidth: '900px',
               padding: `${SPACING_TOKENS.sm} ${SPACING_TOKENS.md}`,
               backgroundColor: COLOR_TOKENS.paperWarm,
               border: `1px solid ${COLOR_TOKENS.border}`,
               borderRadius: RADIUS_TOKENS.sm,
-              marginBottom: SPACING_TOKENS.md,
+              marginTop: SPACING_TOKENS.md,
               fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
               fontSize: '13px',
               color: COLOR_TOKENS.inkMuted,
               textAlign: 'center',
+              boxSizing: 'border-box',
             }}
           >
             {COPY.showingNewestCapped(STACK_CONFIG.maxLightRowsCap)}
           </div>
         )}
 
-        {/* Stack Content Body */}
-        <section
-          data-testid="book-stack-container"
+        {/* Layout container: Three columns (>= 1280px) or Single column (< 1280px) */}
+        <div
+          className="category-three-col-layout"
+          data-testid="category-three-col-layout"
           style={{
             width: '100%',
-            maxWidth: `${STACK_CONFIG.stackWidthLaptopPx}px`,
+            maxWidth: isWideScreen ? '1440px' : '900px',
+            margin: '0 auto',
             display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            position: 'relative',
+            justifyContent: 'center',
+            alignItems: 'flex-start',
+            gap: isWideScreen ? '24px' : '0',
+            padding: isWideScreen ? '0 24px' : '0',
+            boxSizing: 'border-box',
           }}
         >
-          {loading && <StackSkeleton />}
+          {/* Left Rail (>= 1280px) */}
+          {isWideScreen && piles.length > 0 && (
+            <CategoryLeftRail
+              piles={piles}
+              currentSort={currentSort}
+              entries={entries}
+              activePileIdx={activePileIdx}
+              onSelectPile={handleSelectPile}
+            />
+          )}
 
-          {error && (
-            <div
-              data-testid="stack-error-state"
-              style={{
-                textAlign: 'center',
-                padding: SPACING_TOKENS.xxl,
-                backgroundColor: COLOR_TOKENS.paper,
-                border: `1px solid ${COLOR_TOKENS.border}`,
-                borderRadius: RADIUS_TOKENS.md,
-                width: '90%',
-              }}
-            >
-              <RiAlertLine size={32} color={COLOR_TOKENS.terracotta} style={{ marginBottom: SPACING_TOKENS.sm }} />
-              <p style={{ fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans, color: COLOR_TOKENS.inkMuted }}>
-                {error}
-              </p>
-              <button
-                type="button"
-                data-testid="error-retry-btn"
-                onClick={loadData}
+          {/* Center Stack Section */}
+          <section
+            data-testid="book-stack-container"
+            style={{
+              flex: isWideScreen ? '1 1 0' : 'none',
+              width: isWideScreen ? 'auto' : '100%',
+              maxWidth: '900px',
+              minWidth: 0,
+              paddingTop: '48px', // At least 48px between header divider and first book
+              paddingBottom: '64px', // At least 64px below the last table strip
+              paddingLeft: '32px', // At least 32px inside left
+              paddingRight: '32px', // At least 32px inside right
+              boxSizing: 'border-box',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              position: 'relative',
+              overflow: 'visible',
+            }}
+          >
+            {/* Collapsible "About this catalogue" section (< 1280px) */}
+            {!isWideScreen && category && (
+              <CategoryRightRail
+                category={category}
+                stats={stats}
+                availableCoverAssetMap={availableCoverAssetMap}
+                onUpdateCategory={handleUpdateCategory}
+                isCollapsibleSection={true}
+                defaultExpanded={viewportWidth >= 768}
+              />
+            )}
+
+            {loading && <StackSkeleton />}
+
+            {error && (
+              <div
+                data-testid="stack-error-state"
                 style={{
-                  marginTop: SPACING_TOKENS.md,
-                  backgroundColor: COLOR_TOKENS.paperSubtle,
+                  textAlign: 'center',
+                  padding: SPACING_TOKENS.xxl,
+                  backgroundColor: COLOR_TOKENS.paper,
                   border: `1px solid ${COLOR_TOKENS.border}`,
-                  padding: `${SPACING_TOKENS.xs} ${SPACING_TOKENS.md}`,
-                  borderRadius: RADIUS_TOKENS.xs,
-                  cursor: 'pointer',
+                  borderRadius: RADIUS_TOKENS.md,
+                  width: '90%',
                 }}
               >
-                {COPY.retry}
-              </button>
-            </div>
-          )}
+                <RiAlertLine size={32} color={COLOR_TOKENS.terracotta} style={{ marginBottom: SPACING_TOKENS.sm }} />
+                <p style={{ fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans, color: COLOR_TOKENS.inkMuted }}>
+                  {error}
+                </p>
+                <button
+                  type="button"
+                  data-testid="error-retry-btn"
+                  onClick={loadData}
+                  style={{
+                    marginTop: SPACING_TOKENS.md,
+                    backgroundColor: COLOR_TOKENS.paperSubtle,
+                    border: `1px solid ${COLOR_TOKENS.border}`,
+                    padding: `${SPACING_TOKENS.xs} ${SPACING_TOKENS.md}`,
+                    borderRadius: RADIUS_TOKENS.xs,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {COPY.retry}
+                </button>
+              </div>
+            )}
 
-          {!loading && !error && entries.length === 0 && (
-            <EmptyBlankBook onCreateFirstEntry={handleCreateEntry} />
-          )}
+            {!loading && !error && entries.length === 0 && (
+              <EmptyBlankBook onCreateFirstEntry={handleCreateEntry} />
+            )}
 
-          {!loading && !error && entries.length > 0 && (
-            <div
-              style={{
-                width: '100%',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '40px',
-              }}
-            >
-              {piles.map((pileBooks, pileIdx) => {
-                const pileLabel = getPileLabel(pileBooks, pileIdx, currentSort);
-                const pileGeometries = computePileGeometries(pileBooks);
+            {!loading && !error && entries.length > 0 && (
+              <div
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '24px', // 24px vertical gap between piles
+                  overflow: 'visible',
+                }}
+              >
+                {piles.map((pileBooks, pileIdx) => {
+                  const pileLabel = getPileLabel(pileBooks, pileIdx, currentSort);
+                  const pileGeometries = computePileGeometries(pileBooks);
 
-                return (
-                  <div
-                    key={`pile-${pileIdx}`}
-                    data-testid={`stack-pile-${pileIdx}`}
-                    style={{
-                      width: '100%',
-                      maxWidth: `${STACK_CONFIG.stackWidthLaptopPx}px`,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      contentVisibility: 'auto',
-                      containIntrinsicSize: '0 540px',
-                    }}
-                  >
-                    <ol
-                      role="list"
-                      aria-label={`Books in ${category?.title || 'Catalogue'} - ${pileLabel}`}
-                      data-testid={`book-stack-list-${pileIdx}`}
-                      style={{
-                        width: '100%',
-                        maxWidth: `${STACK_CONFIG.stackWidthLaptopPx}px`,
-                        padding: 0,
-                        margin: 0,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'flex-start',
-                        boxSizing: 'border-box',
-                      }}
-                    >
-                      {pileBooks.map((entry) => (
-                        <BookSpine
-                          key={entry.id}
-                          entry={entry}
-                          geometry={pileGeometries.get(entry.id)}
-                          categories={allCategories}
-                          currentCategoryId={categoryId}
-                          onOpen={handleOpenEntry}
-                          onRename={handleRenameEntry}
-                          onMoveToCategory={handleMoveToCategory}
-                          onSelectColor={handleSelectColor}
-                          onOpenSpineCustomizer={() => setCustomizingEntry(entry)}
-                          onTogglePin={handleTogglePin}
-                          onDelete={handleDeleteEntry}
-                          onPrefetch={handlePrefetchEntry}
-                        />
-                      ))}
-                    </ol>
-
-                    {/* Wooden Table Strip for this pile */}
+                  return (
                     <div
-                      data-testid={`table-strip-${pileIdx}`}
-                      aria-hidden="true"
+                      key={`pile-${pileIdx}`}
+                      id={`stack-pile-${pileIdx}`}
+                      data-testid={`stack-pile-${pileIdx}`}
                       style={{
                         width: '100%',
                         maxWidth: '900px',
-                        height: '24px',
-                        background: `
-                          repeating-linear-gradient(90deg, rgba(255,255,255,0.04) 0px, rgba(255,255,255,0.04) 3px, transparent 3px, transparent 12px),
-                          linear-gradient(180deg, #d8cbbe 0%, #c4b5a3 30%, #b8a692 70%, #9e8a75 100%)
-                        `,
-                        borderRadius: `${RADIUS_TOKENS.xs} ${RADIUS_TOKENS.xs} ${RADIUS_TOKENS.sm} ${RADIUS_TOKENS.sm}`,
-                        borderTop: '2px solid rgba(255,255,255,0.45)',
-                        borderBottom: '3px solid rgba(40,30,20,0.3)',
-                        boxShadow: SHADOW_TOKENS.tableStrip,
-                        marginTop: '4px',
-                        boxSizing: 'border-box',
                         display: 'flex',
+                        flexDirection: 'column',
                         alignItems: 'center',
-                        justifyContent: 'flex-end',
-                        padding: '0 18px',
+                        overflow: 'visible',
+                        position: 'relative',
                       }}
                     >
-                      <span
-                        data-testid={`pile-month-label-${pileIdx}`}
+                      {/* Pile Heading */}
+                      <div
                         style={{
-                          fontFamily: TYPOGRAPHY_TOKENS.fontFamilyHandwriting,
-                          fontSize: '13px',
-                          color: '#42372c',
-                          letterSpacing: '0.02em',
-                          textShadow: '0 1px 0 rgba(255,255,255,0.35)',
+                          width: '100%',
+                          marginBottom: '14px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          paddingLeft: '6px',
                         }}
                       >
-                        {pileLabel}
-                      </span>
+                        <h2
+                          id={`pile-heading-${pileIdx}`}
+                          data-testid={`pile-heading-${pileIdx}`}
+                          tabIndex={-1}
+                          style={{
+                            fontFamily: TYPOGRAPHY_TOKENS.fontFamilyHandwriting,
+                            fontSize: '18px',
+                            fontWeight: 700,
+                            color: '#42372c',
+                            margin: 0,
+                            outline: 'none',
+                            letterSpacing: '0.02em',
+                          }}
+                        >
+                          {pileLabel}
+                        </h2>
+                      </div>
+
+                      <ol
+                        role="list"
+                        aria-label={`Books in ${category?.title || 'Catalogue'} - ${pileLabel}`}
+                        data-testid={`book-stack-list-${pileIdx}`}
+                        style={{
+                          width: '100%',
+                          maxWidth: '900px',
+                          padding: 0,
+                          margin: 0,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'flex-start',
+                          boxSizing: 'border-box',
+                          overflow: 'visible',
+                        }}
+                      >
+                        {pileBooks.map((entry) => (
+                          <BookSpine
+                            key={entry.id}
+                            entry={entry}
+                            geometry={pileGeometries.get(entry.id)}
+                            categories={allCategories}
+                            currentCategoryId={categoryId}
+                            isWideScreen={isWideScreen}
+                            onOpen={handleOpenEntry}
+                            onRename={handleRenameEntry}
+                            onMoveToCategory={handleMoveToCategory}
+                            onSelectColor={handleSelectColor}
+                            onOpenSpineCustomizer={() => setCustomizingEntry(entry)}
+                            onTogglePin={handleTogglePin}
+                            onDelete={handleDeleteEntry}
+                            onPrefetch={handlePrefetchEntry}
+                            onHover={handleBookHover}
+                            onFocusEntry={handleBookFocus}
+                          />
+                        ))}
+                      </ol>
+
+                      {/* Wooden Table Strip for this pile */}
+                      <div
+                        data-testid={`table-strip-${pileIdx}`}
+                        aria-hidden="true"
+                        style={{
+                          width: '100%',
+                          maxWidth: '900px',
+                          height: '24px',
+                          background: `
+                            repeating-linear-gradient(90deg, rgba(255,255,255,0.04) 0px, rgba(255,255,255,0.04) 3px, transparent 3px, transparent 12px),
+                            linear-gradient(180deg, #d8cbbe 0%, #c4b5a3 30%, #b8a692 70%, #9e8a75 100%)
+                          `,
+                          borderRadius: `${RADIUS_TOKENS.xs} ${RADIUS_TOKENS.xs} ${RADIUS_TOKENS.sm} ${RADIUS_TOKENS.sm}`,
+                          borderTop: '2px solid rgba(255,255,255,0.45)',
+                          borderBottom: '3px solid rgba(40,30,20,0.3)',
+                          boxShadow: SHADOW_TOKENS.tableStrip,
+                          marginTop: '4px',
+                          boxSizing: 'border-box',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'flex-end',
+                          padding: '0 18px',
+                        }}
+                      >
+                        <span
+                          data-testid={`pile-month-label-${pileIdx}`}
+                          style={{
+                            fontFamily: TYPOGRAPHY_TOKENS.fontFamilyHandwriting,
+                            fontSize: '13px',
+                            color: '#42372c',
+                            letterSpacing: '0.02em',
+                            textShadow: '0 1px 0 rgba(255,255,255,0.35)',
+                          }}
+                        >
+                          {pileLabel}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* Right Rail (>= 1280px) */}
+          {isWideScreen && category && (
+            <CategoryRightRail
+              category={category}
+              stats={stats}
+              availableCoverAssetMap={availableCoverAssetMap}
+              onUpdateCategory={handleUpdateCategory}
+              isCollapsibleSection={false}
+            />
           )}
-        </section>
+        </div>
       </main>
 
       {/* Spine Customizer Modal */}

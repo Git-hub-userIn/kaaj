@@ -8,7 +8,12 @@ import {
   SPINE_PALETTES,
   COPY,
 } from '@kaaj/design';
-import type { CategoryLightRow } from '@kaaj/doc-model';
+import type { CategoryLightRow, EntryLightRow } from '@kaaj/doc-model';
+import {
+  formatRelativeAndAbsoluteTime,
+  formatCreatedDate,
+  formatStats,
+} from './stack-utils.js';
 import {
   RiArrowRightLine,
   RiEditLine,
@@ -37,6 +42,7 @@ interface BookSpineMenuProps {
   currentColor?: string | null;
   categories: CategoryLightRow[];
   currentCategoryId: string;
+  entry?: EntryLightRow;
 }
 
 type MenuView = 'main' | 'color' | 'category';
@@ -56,6 +62,7 @@ export const BookSpineMenu: React.FC<BookSpineMenuProps> = ({
   currentColor,
   categories,
   currentCategoryId,
+  entry,
 }) => {
   const [view, setView] = useState<MenuView>('main');
   const menuRef = useRef<HTMLDivElement>(null);
@@ -150,6 +157,86 @@ export const BookSpineMenu: React.FC<BookSpineMenuProps> = ({
 
       {view === 'main' && (
         <>
+          {entry && (
+            <div
+              data-testid="menu-details-header"
+              style={{
+                padding: `${SPACING_TOKENS.xs} ${SPACING_TOKENS.sm} ${SPACING_TOKENS.sm}`,
+                borderBottom: `1px solid ${COLOR_TOKENS.borderSubtle}`,
+                marginBottom: SPACING_TOKENS.xs,
+              }}
+            >
+              <div
+                data-testid="menu-details-title"
+                style={{
+                  fontFamily: TYPOGRAPHY_TOKENS.fontFamilySerif,
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  color: COLOR_TOKENS.ink,
+                  lineHeight: 1.3,
+                  wordBreak: 'break-word',
+                  marginBottom: '4px',
+                }}
+              >
+                {entry.title}
+              </div>
+              <div
+                data-testid="menu-details-last-edited"
+                style={{
+                  fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                  fontSize: '11px',
+                  color: '#554a3e',
+                  lineHeight: 1.3,
+                }}
+              >
+                <strong style={{ color: COLOR_TOKENS.ink }}>{COPY.lastEdited}:</strong>{' '}
+                {formatRelativeAndAbsoluteTime(entry.updatedAt)}
+              </div>
+              <div
+                data-testid="menu-details-created"
+                style={{
+                  fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                  fontSize: '11px',
+                  color: '#554a3e',
+                  lineHeight: 1.3,
+                }}
+              >
+                <strong style={{ color: COLOR_TOKENS.ink }}>{COPY.created}:</strong>{' '}
+                {formatCreatedDate(entry.createdAt)}
+              </div>
+              <div
+                data-testid="menu-details-stats"
+                style={{
+                  fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                  fontSize: '11px',
+                  color: COLOR_TOKENS.terracottaDark,
+                  fontWeight: 500,
+                  marginTop: '2px',
+                }}
+              >
+                {formatStats(entry.stats)}
+              </div>
+              {entry.pinned && (
+                <div
+                  data-testid="menu-details-pinned"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontFamily: TYPOGRAPHY_TOKENS.fontFamilyHandwriting,
+                    fontSize: '12px',
+                    color: COLOR_TOKENS.terracotta,
+                    fontWeight: 700,
+                    marginTop: '4px',
+                  }}
+                >
+                  <RiPushpinFill size={13} />
+                  Pinned
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             type="button"
             role="menuitem"

@@ -64,7 +64,17 @@ app.get('/categories/:id', async (c) => {
   if (!cat) {
     return c.json({ error: 'Category not found' }, 404);
   }
+  c.header('ETag', `"${cat.version}"`);
   return c.json(cat);
+});
+
+app.get('/categories/:id/stats', async (c) => {
+  const id = c.req.param('id');
+  const stats = await categoriesService.getCategoryStats(id);
+  if (!stats) {
+    return c.json({ error: 'Category not found' }, 404);
+  }
+  return c.json(stats);
 });
 
 app.get('/categories/:id/entries', async (c) => {
@@ -93,12 +103,24 @@ app.post('/categories', async (c) => {
 app.patch('/categories/:id', async (c) => {
   try {
     const id = c.req.param('id');
+    const ifMatch = c.req.header('if-match');
+    let expectedVersion: number | undefined;
+    if (ifMatch) {
+      const parsed = parseInt(ifMatch.replace(/["W\/]/g, '').trim(), 10);
+      if (!Number.isNaN(parsed)) {
+        expectedVersion = parsed;
+      }
+    }
     const body = await c.req.json();
-    const updated = await categoriesService.updateCategory(id, body);
-    if (!updated) {
+    const result = await categoriesService.updateCategory(id, body, expectedVersion);
+    if (!result) {
       return c.json({ error: 'Category not found' }, 404);
     }
-    return c.json(updated);
+    if ('conflict' in result) {
+      return c.json({ error: 'Version conflict', currentVersion: result.currentVersion }, 409);
+    }
+    c.header('ETag', `"${result.category.version}"`);
+    return c.json(result.category);
   } catch (err: any) {
     return c.json({ error: err.message || 'Failed to update category' }, 422);
   }

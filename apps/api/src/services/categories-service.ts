@@ -9,6 +9,9 @@ import type {
   EntryLightRow,
   SpineStyle,
   EntryStats,
+  CategoryStats,
+  MonthEntryCount,
+  TodoItem,
 } from '@kaaj/doc-model';
 import { calculateWeight, calculateEntryStats, createEmptyDocument } from '@kaaj/doc-model';
 import { SEED_COVERS_MANIFEST } from '@kaaj/design';
@@ -838,7 +841,11 @@ export class CategoriesService {
       const raw = await fs.readFile(this.dataFilePath, 'utf8');
       const data = JSON.parse(raw);
       for (const cat of data.categories || []) {
-        this.categories.set(cat.id, cat);
+        this.categories.set(cat.id, {
+          ...cat,
+          todo: Array.isArray(cat.todo) ? cat.todo : [],
+          version: typeof cat.version === 'number' ? cat.version : 1,
+        });
       }
       for (const ent of data.entries || []) {
         this.entries.set(ent.id, ent);
@@ -899,6 +906,8 @@ export class CategoriesService {
         coverAssetId,
         sortOrder: seedCat.sortOrder,
         color: seedCat.color,
+        todo: [],
+        version: 1,
         createdAt: catCreatedAt,
         updatedAt: catCreatedAt,
         deletedAt: null,
@@ -1027,6 +1036,8 @@ export class CategoriesService {
       coverAssetId,
       sortOrder: count,
       color: color || 'terracotta',
+      todo: [],
+      version: 1,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -1043,21 +1054,84 @@ export class CategoriesService {
 
   async updateCategory(
     id: string,
-    updates: Partial<Pick<Category, 'title' | 'description' | 'coverAssetId' | 'color' | 'sortOrder'>>
-  ): Promise<Category | null> {
+    updates: Partial<Pick<Category, 'title' | 'description' | 'coverAssetId' | 'color' | 'sortOrder' | 'todo'>>,
+    expectedVersion?: number
+  ): Promise<{ category: Category } | { conflict: true; currentVersion: number } | null> {
     await this.init();
     const cat = this.categories.get(id);
     if (!cat || cat.deletedAt) return null;
 
+    if (expectedVersion !== undefined && cat.version !== expectedVersion) {
+      return { conflict: true, currentVersion: cat.version };
+    }
+
     const updated: Category = {
       ...cat,
       ...updates,
+      version: (cat.version || 1) + 1,
       updatedAt: new Date().toISOString(),
     };
 
     this.categories.set(id, updated);
     await this.persist();
-    return updated;
+    return { category: updated };
+  }
+
+  async getCategoryStats(categoryId: string): Promise<CategoryStats | null> {
+    await this.init();
+    const cat = this.categories.get(categoryId);
+    if (!cat || cat.deletedAt) return null;
+
+    const catEntries = Array.from(this.entries.values()).filter(
+      (e) => e.categoryId === categoryId && !e.deletedAt
+    );
+
+    let words = 0;
+    let images = 0;
+    let latestUpdatedAt = cat.createdAt;
+
+    for (const e of catEntries) {
+      const stats = e.stats ?? calculateEntryStats(e.doc);
+      words += stats.words;
+      images += stats.images;
+      if (e.updatedAt > latestUpdatedAt) {
+        latestUpdatedAt = e.updatedAt;
+      }
+    }
+
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const entriesPerMonth: MonthEntryCount[] = [];
+    const now = new Date();
+
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const year = d.getFullYear();
+      const monthIndex = d.getMonth();
+      const monthKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+      const label = monthNames[monthIndex];
+      entriesPerMonth.push({
+        month: monthKey,
+        label,
+        count: 0,
+      });
+    }
+
+    for (const e of catEntries) {
+      const entryMonth = e.createdAt.slice(0, 7);
+      const bucket = entriesPerMonth.find((b) => b.month === entryMonth);
+      if (bucket) {
+        bucket.count++;
+      }
+    }
+
+    return {
+      entries: catEntries.length,
+      words,
+      images,
+      createdAt: cat.createdAt,
+      lastEditedAt: catEntries.length > 0 ? latestUpdatedAt : cat.updatedAt,
+      entriesPerMonth,
+    };
   }
 
   async deleteCategory(id: string): Promise<boolean> {

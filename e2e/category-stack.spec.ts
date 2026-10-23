@@ -94,6 +94,8 @@ test.describe('Kaaj Category Screen ("The Book Stack")', () => {
   test('4. Hover / Focus Details Card shows timestamps and stats, dismisses on Escape', async ({
     page,
   }) => {
+    // Narrower screens (< 1280px): floating note card with Escape dismiss
+    await page.setViewportSize({ width: 1100, height: 800 });
     await page.goto('http://localhost:3000/category/cat_ideas');
 
     const firstSpine = page.locator('.book-spine-item').first();

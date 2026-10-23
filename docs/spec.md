@@ -43,16 +43,49 @@ Read-only share links per entry (token to entry, outside the auth guard). Owners
 - Narrow screens reflow into a usable composition. Never keep desktop coordinates.
 - Collage placement: DEFAULT derived from category id and sort order. Persist positions only if a drag-to-arrange feature is added later.
 
-### 2.2 Category: messy stack of books (LOCKED look, details DEFAULT)
+### 2.2 Category: messy stack of books (LOCKED)
 
-- Entries are books lying flat in a messy pile. Title on the left, date on the right of each spine.
-- Thickness reflects entry **weight**, clamped between a minimum and maximum. One huge entry must not dominate the screen.
-- Newest at the bottom. Sort options: date, title, weight. Pinned entries first.
-- Messiness (left offset, tilt up to about 2 degrees, spine colour when unset) is derived from a hash of the entry id. Never stored, never re-randomised on reload. Titles stay horizontal and readable.
-- Overflow: DEFAULT show the newest 8, fold older ones into an expandable "older entries" pile. OPEN: internal scroll instead.
-- Actions per book: open, rename, move category, set colour, pin, delete. Open on click or tap. Menu via `⋯` button (keyboard), long-press (touch), right-click (desktop).
-- Hover or focus nudges the book out sideways. Prefetch the entry on hover or focus.
-- Accessibility: the stack is a real list of buttons, tab order follows sort order, aria-label has title and date. The visual mess is CSS only.
+The category screen displays entries as books lying flat in structured piles. Newest entries appear at the top. Pinned entries appear first.
+
+#### Layout and Breakpoints
+- **Desktop (>= 1280 px):** Three columns `[left rail ~220 px][stack ~900 px][right rail ~280 px]`, centred with equal margins.
+- **Tablet (1024 to 1279 px):** Left rail becomes a compact "Jump to" menu next to the sort control. Right rail becomes a collapsible section "About this catalogue" above the stack (expanded by default).
+- **Mobile (< 1024 px):** No rails. Full-width stack. "About this catalogue" section is collapsed by default on phones.
+- **Spacing:** Maintain at least 48 px between the header divider and the first book. Maintain at least 64 px below the last table strip. Maintain 32 px inside side padding. No parent element may clip props or floating cards. No horizontal scroll at 390, 768, 1100, 1280, or 1440 px.
+
+#### Left Rail ("Jump to", >= 1280 px)
+- Sticky navigation list of piles (month labels under Date sort, "Pile N" otherwise) with entry counts.
+- Click scrolls smoothly (instant under reduced motion) and moves focus to the pile heading.
+- IntersectionObserver highlights the pile currently in view.
+- Bottom summary displays total entries, total words, and last edited timestamp.
+
+#### Right Rail (>= 1280 px) and "About this catalogue" section (< 1280 px)
+1. **Category Image:** Cover image formatted as a taped polaroid. Tilt angle is <= 3 degrees, derived from the category ID hash. The "Change cover" action opens the cover picker. Unset covers render a designed placeholder.
+2. **Category Details:** Displays entries, words, images, created date, and last edited date. Displays a 6-month entries-per-month visual bar strip with a visually hidden text table fallback.
+3. **Sticky Note Checklist:** Yellow paper style note with handwritten font. Contrast is 4.5:1 or higher. Supports add, toggle check, edit text, and delete actions. Maximum 12 items, 200 characters each. Text edits save after 1 second of idle time. Check toggles save immediately. Optimistic concurrency uses `If-Match` with 409 conflict handling.
+
+#### Floating Entry Details Card
+- Displays after 250 ms hover. Placed once at `pointer + (16, 16) px`. Does not follow pointer movement.
+- Entering another book hides the current card and opens the new card with a 100 ms leave delay.
+- Rendered in the top layer portal with pointer events disabled. Positioned strictly with CSS transforms.
+- Flips left or above near screen boundaries and stays inside a 12 px viewport margin.
+- Keyboard focus anchors the card to the right edge of the focused book. Escape dismisses the card. `aria-describedby` links the book and the card.
+- Displays full title (wrapped), last edited (relative and absolute), created date, and counts for words, pages, and images. Contrast is 4.5:1 or higher.
+- On touch devices, tapping opens the entry. Long-press displays details in the context menu header.
+
+#### The Stack: Look and Geometry
+- Books lie flat as true rectangles without skew or perspective.
+- Thickness reflects entry weight from `calculateSpineHeight(doc-model.weight())`, clamped between 44 px and 104 px.
+- Length spans 520 to 780 px on laptop screens. Adjacent books differ in length by at least 40 px. Horizontal offset reaches up to 120 px.
+- Bottom book of each pile has 0 degree rotation. Other books tilt up to 1.2 degrees (`|radians * length / 2| <= 6 px`). Adjacent books do not lean the same direction past 0.8 degrees.
+- Title fonts use one of five presets selected by ID hash unless `entry.spine.font` is set. Adjacent books do not share a font preset. Title text remains horizontal. Contrast exceeds 4.5:1 against the spine background. Light covers include darker border edges (>= 3:1 contrast against the page).
+- Physical props derived deterministically by ID hash: red pinned bookmark ribbon, yellow sticky flag, rubber band.
+- Piles split into groups of 10 entries resting on wooden table strips with contact shadows. Single continuous vertical scroll. Sticky slim header bar appears after the title scrolls away. Restores scroll position on back navigation. Light rows cap at 500 entries with a calm note.
+
+#### Book Actions
+- Real button list with `...` menu button, right-click, context menu key, and long-press support.
+- Menu actions: Open, Rename (inline), Move to catalogue, Customise spine, Pin/Unpin, Delete (soft delete with Undo toast).
+- Spine customisation modal: texture, color, font, finish, bands with live preview and contrast rules. Empty catalogue shows a dashed blank book button. Skeletons show during loading. Error state offers retry.
 
 ### 2.3 Editor (LOCKED)
 
@@ -197,9 +230,11 @@ kaaj/
 
 ## 7. Data model (PostgreSQL via Prisma)
 
-**Category:** id, title, description?, coverAssetId?, sortOrder, createdAt, updatedAt.
+**Category:** id, title, description?, coverAssetId?, sortOrder, color?, todo (array of `{id, text, done}`, max 12 items, 200 chars each), version (int, starts at 1, optimistic concurrency via `If-Match`), createdAt, updatedAt, deletedAt? (soft delete).
 
-**Entry:** id, categoryId (FK), title, doc (jsonb), schemaVersion, version (int, starts at 1), weight (int), sortOrder?, color? (palette token), pinned (bool), createdAt, updatedAt, lastOpenedAt?, deletedAt? (soft delete, DEFAULT keep 30 days).
+**CategoryStats (computed):** entries (int), words (int), images (int), createdAt (ISO), lastEditedAt (ISO), entriesPerMonth (array of `{month, label, count}` for last 6 calendar months).
+
+**Entry:** id, categoryId (FK), title, doc (jsonb), schemaVersion, version (int, starts at 1), weight (int), sortOrder?, color? (palette token), pinned (bool), spine? (nullable SpineStyle), stats? (EntryStats), createdAt, updatedAt, lastOpenedAt?, deletedAt? (soft delete, DEFAULT keep 30 days).
 
 **Asset:** id, storageKey (generated, never the user's filename), mime, bytes, width?, height?, originalName?, checksum, createdAt. Thumbnails are derived, not rows.
 
@@ -219,9 +254,11 @@ kaaj/
 
 ### 8.1 API (all JSON except uploads and exports)
 
-- `GET/POST /categories`, `PATCH/DELETE /categories/:id`
-- `GET /categories/:id/entries` (light rows)
-- `POST /entries`, `GET /entries/:id`, `PUT /entries/:id` (save document), `PATCH /entries/:id` (title, category, colour, pin, sortOrder), `DELETE /entries/:id` (soft), `POST /entries/:id/restore`
+- `GET/POST /categories`, `PATCH/DELETE /categories/:id` (PATCH validates `If-Match`, returns 409 on version conflict)
+- `GET /categories/:id` (returns `ETag: "<version>"` header)
+- `GET /categories/:id/stats` (returns category stats and 6-month entries-per-month histogram)
+- `GET /categories/:id/entries` (light rows, capped at 500)
+- `POST /entries`, `GET /entries/:id`, `PUT /entries/:id` (save document), `PATCH /entries/:id` (title, category, colour, pin, sortOrder, spine), `DELETE /entries/:id` (soft), `POST /entries/:id/restore`
 - `POST /entries/:id/lock`, `POST /entries/:id/lock/heartbeat`, `DELETE /entries/:id/lock`, `POST /entries/:id/lock/takeover`
 - `POST /assets` (multipart), `GET /assets/:id`, `GET /assets/:id/thumb?size=`
 - `POST /export`, `POST /import` (validate and preview first, then confirm)
@@ -391,12 +428,17 @@ End each phase with: what changed, key files, e2e tests run with results includi
 
 ## 17. Open items
 
-- Category stack overflow: collapsed pile (default) or internal scroll.
 - Freehand doodles in v1 or v1.1.
 - Trash retention period and whether to expose a trash screen (default soft delete, 30 days).
 - Palette token names and values, and the sticker library source (must be licensed or self-made).
-- Weight formula constants and the min and max spine thickness.
 - Overlay technology (spike result).
 - Whether the API moves to Bun after the spike.
 - Page default size and content-area margins.
 - Future: share links, search, content-anchored annotations, hosting and backup plan, SSO provider.
+
+### Resolved Decisions (LOCKED)
+- **Category Stack Overflow:** Single continuous vertical scroll. Entries divide into piles of 10 resting on wooden table strips with month or pile labels. Light rows cap at 500 entries.
+- **Spine Thickness:** Clamped between 44 px (minimum touch target) and 104 px (maximum spine height).
+- **Category Layout and Rails:** Three columns on >= 1280 px (`[left rail ~220 px][stack ~900 px][right rail ~280 px]`). Compact Jump to menu and collapsible "About this catalogue" section on 1024–1279 px. Full-width stack on < 1024 px (collapsed section on phones).
+- **Category Data and Concurrency:** Category model includes `todo` checklist (max 12 items, 200 chars) and `version`. `PATCH /categories/:id` checks `If-Match` and returns 409 on conflict. `GET /categories/:id/stats` supplies real totals and 6-month histogram.
+- **Floating Entry Details Card:** Rendered in top layer portal at `pointer + (16, 16) px` with transform placement only. Flips left/above with 12 px viewport margins. Anchor to book right edge on keyboard focus. Dismiss on Escape.

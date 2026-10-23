@@ -25,6 +25,7 @@ interface BookSpineProps {
   geometry?: BookGeometry;
   categories: CategoryLightRow[];
   currentCategoryId: string;
+  isWideScreen?: boolean;
   onOpen: (entryId: string) => void;
   onRename: (entryId: string, newTitle: string) => void;
   onMoveToCategory: (entryId: string, targetCategoryId: string) => void;
@@ -33,6 +34,8 @@ interface BookSpineProps {
   onTogglePin: (entryId: string) => void;
   onDelete: (entryId: string) => void;
   onPrefetch?: (entryId: string) => void;
+  onHover?: (entry: EntryLightRow) => void;
+  onFocusEntry?: (entry: EntryLightRow) => void;
 }
 
 export const BookSpine: React.FC<BookSpineProps> = ({
@@ -40,6 +43,7 @@ export const BookSpine: React.FC<BookSpineProps> = ({
   geometry: propGeometry,
   categories,
   currentCategoryId,
+  isWideScreen = false,
   onOpen,
   onRename,
   onMoveToCategory,
@@ -48,6 +52,8 @@ export const BookSpine: React.FC<BookSpineProps> = ({
   onTogglePin,
   onDelete,
   onPrefetch,
+  onHover,
+  onFocusEntry,
 }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -55,8 +61,10 @@ export const BookSpine: React.FC<BookSpineProps> = ({
   const [isHovered, setIsHovered] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [anchorCoords, setAnchorCoords] = useState<{ x: number; y: number } | null>(null);
 
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const spineRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -100,13 +108,25 @@ export const BookSpine: React.FC<BookSpineProps> = ({
     return () => document.removeEventListener('keydown', handleGlobalKeyDown);
   }, [showDetails]);
 
-  // Hover delay handling (250 ms delay per spec)
-  const handlePointerEnter = () => {
+  // Hover delay handling (250 ms delay, 100 ms leave delay per spec)
+  const handlePointerEnter = (e: React.PointerEvent) => {
     setIsHovered(true);
     onPrefetch?.(entry.id);
+    onHover?.(entry);
+
+    if (e.pointerType === 'touch') return;
+
+    if (leaveTimerRef.current) {
+      clearTimeout(leaveTimerRef.current);
+      leaveTimerRef.current = null;
+    }
+
+    const clientX = e.clientX;
+    const clientY = e.clientY;
 
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
+      setAnchorCoords({ x: clientX, y: clientY });
       setShowDetails(true);
     }, STACK_CONFIG.detailsCardDelayMs);
   };
@@ -117,15 +137,23 @@ export const BookSpine: React.FC<BookSpineProps> = ({
       clearTimeout(hoverTimerRef.current);
       hoverTimerRef.current = null;
     }
-    if (!isFocused) {
-      setShowDetails(false);
-    }
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+    leaveTimerRef.current = setTimeout(() => {
+      if (!isFocused) {
+        setShowDetails(false);
+        setAnchorCoords(null);
+      }
+    }, 100);
   };
 
   const handleFocus = () => {
     setIsFocused(true);
-    setShowDetails(true);
     onPrefetch?.(entry.id);
+    onFocusEntry?.(entry);
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+    setAnchorCoords(null);
+    setShowDetails(true);
   };
 
   const handleBlur = (e: React.FocusEvent) => {
@@ -135,6 +163,7 @@ export const BookSpine: React.FC<BookSpineProps> = ({
     setIsFocused(false);
     if (!isHovered) {
       setShowDetails(false);
+      setAnchorCoords(null);
     }
   };
 
@@ -143,12 +172,14 @@ export const BookSpine: React.FC<BookSpineProps> = ({
     e.stopPropagation();
     setIsMenuOpen(true);
     setShowDetails(false);
+    setAnchorCoords(null);
   };
 
   const handleTouchStart = () => {
     longPressTimerRef.current = setTimeout(() => {
       setIsMenuOpen(true);
       setShowDetails(false);
+      setAnchorCoords(null);
     }, 500);
   };
 
@@ -286,6 +317,12 @@ export const BookSpine: React.FC<BookSpineProps> = ({
             [data-entry-id="${entry.id}"] [data-testid^="book-title-"] {
               font-size: ${Math.max(16, Math.round(geometry.fontSizePx * 0.85))}px !important;
             }
+            [data-entry-id="${entry.id}"] [data-testid^="sticky-flag-"] {
+              left: min(calc(${geometry.flagOffsetPx}px * 0.78), calc(100% - 36px)) !important;
+            }
+            [data-entry-id="${entry.id}"] [data-testid^="rubber-band-"] {
+              left: min(calc(${geometry.rubberBandOffsetPx}px * 0.78), calc(100% - 24px)) !important;
+            }
           }
           @media (max-width: 640px) {
             [data-entry-id="${entry.id}"] {
@@ -301,6 +338,12 @@ export const BookSpine: React.FC<BookSpineProps> = ({
             [data-entry-id="${entry.id}"] [data-testid^="paper-date-label-"] {
               font-size: 11px !important;
               padding: 1px 5px !important;
+            }
+            [data-entry-id="${entry.id}"] [data-testid^="sticky-flag-"] {
+              left: min(calc(${geometry.flagOffsetPx}px * 0.44), calc(100% - 32px)) !important;
+            }
+            [data-entry-id="${entry.id}"] [data-testid^="rubber-band-"] {
+              left: min(calc(${geometry.rubberBandOffsetPx}px * 0.44), calc(100% - 20px)) !important;
             }
           }
         `}</style>
@@ -636,7 +679,16 @@ export const BookSpine: React.FC<BookSpineProps> = ({
 
         {/* Hover / Focus Details Card */}
         {showDetails && !isMenuOpen && !isRenaming && (
-          <BookDetailsCard entry={entry} id={detailsCardId} />
+          <BookDetailsCard
+            entry={entry}
+            id={detailsCardId}
+            anchorCoords={anchorCoords}
+            targetEl={spineRef.current}
+            onDismiss={() => {
+              setShowDetails(false);
+              setAnchorCoords(null);
+            }}
+          />
         )}
 
         {/* Action Menu Dropdown */}
@@ -655,6 +707,7 @@ export const BookSpine: React.FC<BookSpineProps> = ({
           currentColor={entry.color}
           categories={categories}
           currentCategoryId={currentCategoryId}
+          entry={entry}
         />
       </div>
     </li>
