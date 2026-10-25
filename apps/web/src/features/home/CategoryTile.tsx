@@ -8,6 +8,7 @@ import {
   SHADOW_TOKENS,
   COPY,
 } from '@kaaj/design';
+import { API_BASE_URL } from '../../config/api.js';
 
 interface CategoryTileProps {
   category: CategoryLightRow;
@@ -145,7 +146,7 @@ export const CategoryTile: React.FC<CategoryTileProps> = ({
         {/* Cover Image or Designed Placeholder */}
         {category.coverAssetId ? (
           <img
-            src={`/api/assets/${category.coverAssetId}/thumb?size=960`}
+            src={`${API_BASE_URL}/assets/${category.coverAssetId}/thumb?size=960`}
             alt=""
             loading={isHero ? 'eager' : 'lazy'}
             width="800"

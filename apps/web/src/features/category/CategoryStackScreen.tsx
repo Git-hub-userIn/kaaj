@@ -21,6 +21,7 @@ import {
 import type { Category, CategoryLightRow, EntryLightRow, SpineStyle, CategoryStats } from '@kaaj/doc-model';
 import { getPileLabel, computePileGeometries } from './stack-utils.js';
 import { RiAddLine, RiArrowLeftLine, RiAlertLine } from '@remixicon/react';
+import { API_BASE_URL, AUTH_TOKEN } from '../../config/api.js';
 
 interface CategoryStackScreenProps {
   categoryId: string;
@@ -127,13 +128,13 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const headers = { Authorization: 'Bearer kaaj-local-dev-token' };
+      const headers = { Authorization: AUTH_TOKEN };
 
       const [catRes, entriesRes, allCatsRes, statsRes] = await Promise.all([
-        fetch(`http://localhost:3001/categories/${categoryId}`, { headers }),
-        fetch(`http://localhost:3001/categories/${categoryId}/entries`, { headers }),
-        fetch('http://localhost:3001/categories', { headers }),
-        fetch(`http://localhost:3001/categories/${categoryId}/stats`, { headers }),
+        fetch(`${API_BASE_URL}/categories/${categoryId}`, { headers }),
+        fetch(`${API_BASE_URL}/categories/${categoryId}/entries`, { headers }),
+        fetch(`${API_BASE_URL}/categories`, { headers }),
+        fetch(`${API_BASE_URL}/categories/${categoryId}/stats`, { headers }),
       ]);
 
       if (!catRes.ok) {
@@ -176,11 +177,11 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     async (updates: Partial<Category>): Promise<boolean> => {
       if (!category) return false;
       try {
-        const res = await fetch(`http://localhost:3001/categories/${category.id}`, {
+        const res = await fetch(`${API_BASE_URL}/categories/${category.id}`, {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: 'Bearer kaaj-local-dev-token',
+            Authorization: AUTH_TOKEN,
             'If-Match': `"${category.version}"`,
           },
           body: JSON.stringify(updates),
@@ -255,11 +256,11 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
   // Create new entry
   const handleCreateEntry = async () => {
     try {
-      const res = await fetch('http://localhost:3001/entries', {
+      const res = await fetch(`${API_BASE_URL}/entries`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer kaaj-local-dev-token',
+          Authorization: AUTH_TOKEN,
         },
         body: JSON.stringify({
           categoryId,
@@ -283,11 +284,11 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     );
 
     try {
-      await fetch(`http://localhost:3001/entries/${entryId}`, {
+      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer kaaj-local-dev-token',
+          Authorization: AUTH_TOKEN,
         },
         body: JSON.stringify({ title: newTitle }),
       });
@@ -301,11 +302,11 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     setEntries((prev) => prev.filter((e) => e.id !== entryId));
 
     try {
-      await fetch(`http://localhost:3001/entries/${entryId}`, {
+      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer kaaj-local-dev-token',
+          Authorization: AUTH_TOKEN,
         },
         body: JSON.stringify({ categoryId: targetCategoryId }),
       });
@@ -321,11 +322,11 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     );
 
     try {
-      await fetch(`http://localhost:3001/entries/${entryId}`, {
+      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer kaaj-local-dev-token',
+          Authorization: AUTH_TOKEN,
         },
         body: JSON.stringify({ color: colorKey }),
       });
@@ -344,11 +345,11 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     );
 
     try {
-      await fetch(`http://localhost:3001/entries/${entryId}`, {
+      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer kaaj-local-dev-token',
+          Authorization: AUTH_TOKEN,
         },
         body: JSON.stringify({ spine }),
       });
@@ -368,11 +369,11 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     );
 
     try {
-      await fetch(`http://localhost:3001/entries/${entryId}`, {
+      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer kaaj-local-dev-token',
+          Authorization: AUTH_TOKEN,
         },
         body: JSON.stringify({ pinned: newPinned }),
       });
@@ -390,9 +391,9 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     setDeletedEntry({ id: target.id, title: target.title });
 
     try {
-      await fetch(`http://localhost:3001/entries/${entryId}`, {
+      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'DELETE',
-        headers: { Authorization: 'Bearer kaaj-local-dev-token' },
+        headers: { Authorization: AUTH_TOKEN },
       });
     } catch {
       loadData();
@@ -406,9 +407,9 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     setDeletedEntry(null);
 
     try {
-      const res = await fetch(`http://localhost:3001/entries/${toRestore.id}/restore`, {
+      const res = await fetch(`${API_BASE_URL}/entries/${toRestore.id}/restore`, {
         method: 'POST',
-        headers: { Authorization: 'Bearer kaaj-local-dev-token' },
+        headers: { Authorization: AUTH_TOKEN },
       });
       if (res.ok) {
         loadData();

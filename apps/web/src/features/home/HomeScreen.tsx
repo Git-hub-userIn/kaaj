@@ -4,6 +4,7 @@ import { COLOR_TOKENS, SPACING_TOKENS, COPY } from '@kaaj/design';
 import { HomeHeader } from './HomeHeader.js';
 import { CategoryCollage } from './CategoryCollage.js';
 import { UndoToast } from './UndoToast.js';
+import { API_BASE_URL, AUTH_TOKEN } from '../../config/api.js';
 
 interface HomeScreenProps {
   onNavigateToCategory: (id: string) => void;
@@ -17,8 +18,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
 
   const fetchCategories = useCallback(async () => {
     try {
-      const res = await fetch('/api/categories', {
-        headers: { Authorization: 'Bearer kaaj-local-dev-token' },
+      const res = await fetch(`${API_BASE_URL}/categories`, {
+        headers: { Authorization: AUTH_TOKEN },
       });
       if (!res.ok) {
         throw new Error(`Failed to load categories: ${res.statusText}`);
@@ -39,11 +40,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
   }, [fetchCategories]);
 
   const handleAddCategory = async (title: string, coverAssetId?: string) => {
-    const res = await fetch('/api/categories', {
+    const res = await fetch(`${API_BASE_URL}/categories`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: 'Bearer kaaj-local-dev-token',
+        Authorization: AUTH_TOKEN,
       },
       body: JSON.stringify({ title, coverAssetId }),
     });
@@ -60,9 +61,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
     setRecentlyDeleted(category);
 
     try {
-      await fetch(`/api/categories/${category.id}`, {
+      await fetch(`${API_BASE_URL}/categories/${category.id}`, {
         method: 'DELETE',
-        headers: { Authorization: 'Bearer kaaj-local-dev-token' },
+        headers: { Authorization: AUTH_TOKEN },
       });
     } catch (err) {
       console.error(err);
@@ -81,9 +82,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
     setCategories((prev) => [...prev, catToRestore].sort((a, b) => a.sortOrder - b.sortOrder));
 
     try {
-      await fetch(`/api/categories/${catToRestore.id}/restore`, {
+      await fetch(`${API_BASE_URL}/categories/${catToRestore.id}/restore`, {
         method: 'POST',
-        headers: { Authorization: 'Bearer kaaj-local-dev-token' },
+        headers: { Authorization: AUTH_TOKEN },
       });
     } catch (err) {
       console.error(err);
@@ -96,11 +97,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
     );
 
     try {
-      await fetch(`/api/categories/${category.id}`, {
+      await fetch(`${API_BASE_URL}/categories/${category.id}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer kaaj-local-dev-token',
+          Authorization: AUTH_TOKEN,
         },
         body: JSON.stringify({ title: nextTitle }),
       });

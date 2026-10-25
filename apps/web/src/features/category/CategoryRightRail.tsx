@@ -19,6 +19,7 @@ import {
   RiArrowDownSLine,
   RiArrowRightSLine,
 } from '@remixicon/react';
+import { API_BASE_URL } from '../../config/api.js';
 
 interface CategoryRightRailProps {
   category: Category;
@@ -215,7 +216,7 @@ export const CategoryRightRail: React.FC<CategoryRightRailProps> = ({
         >
           {category.coverAssetId ? (
             <img
-              src={`/api/assets/${category.coverAssetId}/thumb?size=960`}
+              src={`${API_BASE_URL}/assets/${category.coverAssetId}/thumb?size=960`}
               alt={`${category.title} cover`}
               style={{
                 width: '100%',
