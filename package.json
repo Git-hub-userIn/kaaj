@@ -8,7 +8,11 @@
     "e2e"
   ],
   "scripts": {
-    "dev": "bun run --filter \"*\" dev",
+    "dev": "bun scripts/dev.ts",
+    "dev:ui": "bun --filter @kaaj/web dev",
+    "dev:web": "bun --filter @kaaj/web dev",
+    "dev:api": "bun --filter @kaaj/api dev",
+    "dev:backend": "bun --filter @kaaj/api dev",
     "build": "bun run --filter \"*\" build",
     "test:e2e": "bun --filter e2e test",
     "typecheck": "bun run --filter \"*\" typecheck"
