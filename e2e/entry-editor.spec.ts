@@ -142,16 +142,20 @@ test.describe('Kaaj Entry Editor (v1) Suite', () => {
     await page.goto('http://localhost:3000/entry/entry_ideas_3');
     const editor = page.locator('.kaaj-editor-content');
     await expect(editor).toBeVisible();
+    await expect(page.locator('[data-testid="entry-title-input"]')).not.toHaveValue('', { timeout: 10000 });
 
     const toolbar = page.locator('[data-testid="selection-toolbar"]');
     await expect(toolbar).not.toBeVisible();
 
     // Select text -> shows
     await editor.click();
-    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Toolbar Visibility Sample');
     await page.keyboard.down('Shift');
-    await page.keyboard.press('ArrowRight');
-    await page.keyboard.press('ArrowRight');
+    for (let i = 0; i < 25; i++) {
+      await page.keyboard.press('ArrowLeft');
+    }
     await page.keyboard.up('Shift');
     await expect(toolbar).toBeVisible();
 
@@ -161,6 +165,7 @@ test.describe('Kaaj Entry Editor (v1) Suite', () => {
 
     // Select again -> collapse -> hides
     await page.keyboard.down('Shift');
+    await page.keyboard.press('ArrowRight');
     await page.keyboard.press('ArrowRight');
     await page.keyboard.up('Shift');
     await expect(toolbar).toBeVisible();
@@ -557,5 +562,46 @@ test.describe('Kaaj Entry Editor (v1) Suite', () => {
     const body = await getRes.json();
     const parse = DocumentEnvelopeV2Schema.safeParse(body.doc);
     expect(parse.success).toBe(true);
+  });
+
+  // Test 15: Links are clickable and open in a new tab
+  test('15. Links in editor are clickable with pointer cursor and open in new tab', async ({ page, context }) => {
+    await page.goto('http://localhost:3000/entry/entry_food-recipes_7');
+    const editor = page.locator('.kaaj-editor-content');
+    await expect(editor).toBeVisible();
+
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Visit Web Library Source');
+
+    // Select "Web Library Source" (18 chars)
+    await page.keyboard.down('Shift');
+    for (let i = 0; i < 18; i++) {
+      await page.keyboard.press('ArrowLeft');
+    }
+    await page.keyboard.up('Shift');
+
+    // Apply link via toolbar
+    const linkBtn = page.locator('[data-testid="toolbar-link"]');
+    await expect(linkBtn).toBeVisible();
+    await linkBtn.click();
+
+    const linkInput = page.locator('[data-testid="link-url-input"]');
+    await expect(linkInput).toBeVisible();
+    await linkInput.fill('https://example.com/library');
+    await page.locator('[data-testid="apply-link-btn"]').click();
+
+    const linkEl = editor.locator('a').filter({ hasText: 'Web Library Source' }).first();
+    await expect(linkEl).toBeVisible();
+    await expect(linkEl).toHaveAttribute('target', '_blank');
+
+    // Verify click triggers popup/new tab
+    const [popup] = await Promise.all([
+      page.waitForEvent('popup'),
+      linkEl.click(),
+    ]);
+    expect(popup.url()).toContain('example.com');
+    await popup.close();
   });
 });

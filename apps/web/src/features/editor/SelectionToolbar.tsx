@@ -46,6 +46,7 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ editor }) =>
   const [mobileBottom, setMobileBottom] = useState(8);
 
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const dismissedRangeRef = useRef<{ from: number; to: number } | null>(null);
 
   // Detect phone viewport
   useEffect(() => {
@@ -84,8 +85,18 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ editor }) =>
       if (selection.empty) {
         setIsVisible(false);
         setActiveDropdown('none');
+        dismissedRangeRef.current = null;
         return;
       }
+
+      if (
+        dismissedRangeRef.current &&
+        dismissedRangeRef.current.from === selection.from &&
+        dismissedRangeRef.current.to === selection.to
+      ) {
+        return;
+      }
+      dismissedRangeRef.current = null;
 
       const { from, to } = selection;
       const start = editor.view.coordsAtPos(from);
@@ -116,15 +127,18 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ editor }) =>
   // Close on Escape
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isVisible) {
+      if (e.key === 'Escape') {
+        dismissedRangeRef.current = {
+          from: editor.state.selection.from,
+          to: editor.state.selection.to,
+        };
         setIsVisible(false);
         setActiveDropdown('none');
-        editor.commands.focus();
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isVisible, editor]);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [editor]);
 
   if (!isVisible) return null;
 
@@ -304,17 +318,13 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ editor }) =>
         {/* Link */}
         <button
           type="button"
-          aria-label="Add or remove link"
+          aria-label="Add or edit link"
           aria-pressed={isLinkActive}
           data-testid="toolbar-link"
           style={buttonStyle(isLinkActive)}
           onClick={() => {
-            if (isLinkActive) {
-              editor.chain().focus().unsetLink().run();
-            } else {
-              setLinkInput(editor.getAttributes('link').href || '');
-              setActiveDropdown(activeDropdown === 'link' ? 'none' : 'link');
-            }
+            setLinkInput(editor.getAttributes('link').href || '');
+            setActiveDropdown(activeDropdown === 'link' ? 'none' : 'link');
           }}
         >
           <LinkIcon size={16} aria-hidden="true" />
@@ -783,6 +793,28 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ editor }) =>
             >
               Apply
             </button>
+            {isLinkActive && (
+              <button
+                type="button"
+                data-testid="remove-link-btn"
+                onClick={() => {
+                  editor.chain().focus().unsetLink().run();
+                  setActiveDropdown('none');
+                  setLinkInput('');
+                }}
+                style={{
+                  padding: '6px 10px',
+                  backgroundColor: 'transparent',
+                  color: COLOR_TOKENS.terracottaDark,
+                  border: `1px solid ${COLOR_TOKENS.border}`,
+                  borderRadius: RADIUS_TOKENS.sm,
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                }}
+              >
+                Remove
+              </button>
+            )}
           </form>
         </div>
       )}

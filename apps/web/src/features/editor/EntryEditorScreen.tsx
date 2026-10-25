@@ -129,7 +129,13 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       }),
       Underline,
       Link.configure({
-        openOnClick: false,
+        openOnClick: true,
+        autolink: true,
+        linkOnPaste: true,
+        HTMLAttributes: {
+          target: '_blank',
+          rel: 'noopener noreferrer nofollow',
+        },
         validate: (href) => /^(https?:\/\/|mailto:)/i.test(href),
       }),
       TextStyle,
@@ -588,6 +594,10 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         .kaaj-editor-content a {
           color: ${COLOR_TOKENS.terracottaDark};
           text-decoration: underline;
+          cursor: pointer;
+        }
+        .kaaj-editor-content a:hover {
+          color: ${COLOR_TOKENS.terracotta};
         }
         .kaaj-editor-content mark {
           border-radius: 2px;
