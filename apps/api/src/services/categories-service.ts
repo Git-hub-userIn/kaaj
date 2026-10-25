@@ -13,7 +13,8 @@ import type {
   MonthEntryCount,
   TodoItem,
 } from '@kaaj/doc-model';
-import { calculateWeight, calculateEntryStats, createEmptyDocument } from '@kaaj/doc-model';
+import { calculateWeight, calculateEntryStats, createEmptyDocument, migrateDocumentToV2 } from '@kaaj/doc-model';
+import type { DocumentEnvelopeV2, TopLevelBlock } from '@kaaj/doc-model';
 import { SEED_COVERS_MANIFEST } from '@kaaj/design';
 import type { LocalDiskAssetStore } from '../stores/asset-store.js';
 
@@ -922,47 +923,58 @@ export class CategoriesService {
         const entryTimestamp = new Date(nowMs - offsetDays * 24 * 60 * 60 * 1000 + entryIndex * 60000).toISOString();
 
         // Build document body blocks with varied, realistic length based on entry index
-        const bodyContent: Array<Record<string, unknown>> = [
-          { type: 'heading', level: 1, text: entrySpec.title },
+        const topLevelBlocks: TopLevelBlock[] = [
+          {
+            type: 'heading',
+            attrs: { id: `blk_${entryId}_0`, level: 1, textAlign: 'left' },
+            content: [{ type: 'text', text: entrySpec.title }],
+          },
         ];
 
-        const depth = (entryIndex % 6) + 1;
-        for (let r = 0; r < depth; r++) {
-          for (const p of entrySpec.paragraphs) {
-            bodyContent.push({ type: 'paragraph', text: p });
-          }
-        }
+        // Give entries varied text lengths and formatting
+        // First 10 entries vary nicely (weights 3 to 18, heights 48px to 65px)
+        const repetitions = entryIndex < 10
+          ? ((entryIndex % 4) + 1)
+          : ((entryIndex % 8) + 2);
 
-        const imagesToAdd = entrySpec.imageCount ?? (entryIndex % 4 === 0 ? 1 : 0);
-        if (imagesToAdd > 0) {
-          for (let i = 0; i < imagesToAdd; i++) {
-            bodyContent.push({
-              type: 'image',
-              assetId: coverAssetId || `asset_${entrySpec.color || 'default'}`,
-              alt: `${entrySpec.title} illustration`,
-              width: 0.85,
+        for (let r = 0; r < repetitions; r++) {
+          for (let pIdx = 0; pIdx < entrySpec.paragraphs.length; pIdx++) {
+            const pText = entrySpec.paragraphs[pIdx];
+            topLevelBlocks.push({
+              type: 'paragraph',
+              attrs: { id: `blk_${entryId}_p_${r}_${pIdx}`, textAlign: 'left' },
+              content: [{ type: 'text', text: pText }],
             });
           }
         }
 
-        const numPages = Math.max(1, entrySpec.pageCount ?? 1);
-        const pages = [];
-        for (let pIdx = 0; pIdx < numPages; pIdx++) {
-          pages.push({
-            id: `p_${entryId}_${pIdx + 1}`,
-            size: { width: 1200, height: 1600 },
-            background: { type: 'solid' as const, token: 'paper' },
-            body: {
-              format: 'kaaj-rich-text-v1' as const,
-              content: pIdx === 0 ? bodyContent : [{ type: 'paragraph', text: 'Continued reflections and extended journal notes.' }],
-            },
-            layers: [],
+        // Add a blockquote or divider periodically
+        if (entryIndex % 3 === 0) {
+          topLevelBlocks.push({
+            type: 'blockquote',
+            attrs: { id: `blk_${entryId}_q` },
+            content: [
+              {
+                type: 'paragraph',
+                attrs: { id: `blk_${entryId}_qp`, textAlign: 'left' },
+                content: [{ type: 'text', text: 'Collecting fragments is not hoarding; it is an act of sense-making.' }],
+              },
+            ],
+          });
+        }
+        if (entryIndex % 4 === 0) {
+          topLevelBlocks.push({
+            type: 'horizontalRule',
+            attrs: { id: `blk_${entryId}_hr` },
           });
         }
 
-        const doc: DocumentEnvelope = {
-          schemaVersion: 1,
-          pages,
+        const doc: DocumentEnvelopeV2 = {
+          schemaVersion: 2,
+          doc: {
+            type: 'doc',
+            content: topLevelBlocks,
+          },
         };
 
         const calculatedWeight = calculateWeight(doc);
@@ -1207,14 +1219,17 @@ export class CategoriesService {
     title = 'Untitled',
     color?: string,
     pinned = false,
-    spine?: SpineStyle
+    spine?: SpineStyle,
+    docInput?: DocumentEnvelope
   ): Promise<EntryRecord> {
     await this.init();
     const now = new Date().toISOString();
-    const entryId = `entry_${Date.now()}`;
+    const entryId = `entry_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     const cleanTitle = title.trim() || 'Untitled';
 
-    const doc = createEmptyDocument(cleanTitle);
+    const doc = docInput
+      ? (docInput.schemaVersion === 2 ? docInput : migrateDocumentToV2(docInput).doc)
+      : createEmptyDocument();
     const weightVal = calculateWeight(doc);
     const stats = calculateEntryStats(doc);
 
@@ -1283,8 +1298,9 @@ export class CategoriesService {
   async saveEntryDoc(
     id: string,
     doc: DocumentEnvelope,
-    expectedVersion?: number
-  ): Promise<{ entry: EntryRecord; saved: boolean }> {
+    expectedVersion?: number,
+    title?: string
+  ): Promise<{ conflict: true; currentVersion: number } | { entry: EntryRecord; saved: boolean }> {
     await this.init();
     const entry = this.entries.get(id);
     if (!entry || entry.deletedAt) {
@@ -1292,11 +1308,14 @@ export class CategoriesService {
     }
 
     if (expectedVersion !== undefined && entry.version !== expectedVersion) {
-      throw new Error(`Version conflict: expected ${expectedVersion}, got ${entry.version}`);
+      return { conflict: true, currentVersion: entry.version };
     }
 
     const calculatedWeight = calculateWeight(doc);
     entry.doc = doc;
+    if (title !== undefined && title.trim()) {
+      entry.title = title.trim();
+    }
     entry.weight = calculatedWeight;
     entry.stats = calculateEntryStats(doc);
     entry.version += 1;

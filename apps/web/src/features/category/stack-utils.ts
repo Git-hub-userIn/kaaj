@@ -352,9 +352,7 @@ export function formatRelativeAndAbsoluteTime(isoString: string): string {
 
 export function formatStats(stats?: EntryStats): string {
   const words = stats?.words ?? 0;
-  const pages = stats?.pages ?? 1;
-  const images = stats?.images ?? 0;
-  return `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'}, ${pages} ${pages === 1 ? 'page' : 'pages'}, ${images} ${images === 1 ? 'image' : 'images'}`;
+  const images = stats?.images ?? 0; return images > 0 ? `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'}, ${images} ${images === 1 ? 'image' : 'images'}` : `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'}`;
 }
 
 export function getPileLabel(

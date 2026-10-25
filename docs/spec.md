@@ -87,21 +87,31 @@ The category screen displays entries as books lying flat in structured piles. Ne
 - Menu actions: Open, Rename (inline), Move to catalogue, Customise spine, Pin/Unpin, Delete (soft delete with Undo toast).
 - Spine customisation modal: texture, color, font, finish, bands with live preview and contrast rules. Empty catalogue shows a dashed blank book button. Skeletons show during loading. Error state offers retry.
 
-### 2.3 Editor (LOCKED)
+### 2.3 Editor (v1 LOCKED)
 
-- A fixed-ratio page (default 3:4 portrait) containing a flowing rich-text body, with optional freeform layers above it.
-- Core writing controls are restrained. Everything decorative sits behind **Add layer** or **Decorate**. Contextual controls appear when an object is selected.
-- Visible save state: `Saving`, `Saved`, `Couldn't save`. `Saved` only after the server confirms.
-- Undo and redo. Reduced-motion respected. Mobile: compact toolbar, bottom sheet for selected-object controls, zoom or scroll instead of shrinking the page until text is unreadable.
-- Desktop: side panel for layers and assets.
+- **Layout:** Single continuous rich-text editor for the entire entry (`/entry/:id`). Single centred reading column (maximum width ~760 px) on the paper style background. Design tokens only, no hard-coded values.
+- **Top Bar:** "<- Category" link, large serif title field (placeholder "Untitled"), and quiet save status indicator on the right ("Saving...", "Saved · just now", "Couldn't save · Retry").
+- **Title Behaviour:** Saved with entry and displayed on the book spine. Enter key in title moves focus to body editor.
+- **Controls (Restrained):**
+  1. Floating selection toolbar: appears above text selection; hides on collapse or Escape key.
+  2. "/" menu: block insertion trigger at cursor position.
+  3. Keyboard shortcuts: standard formatting shortcuts (Ctrl/Cmd+B, I, U, Z, Shift+Z) and markdown rules (`# `, `- `, `1. `, `> `).
+- **Phone (<768 px):** Docked selection toolbar above on-screen keyboard (using `visualViewport`). Font family, font size, and text/highlight colours open in bottom sheets. No horizontal scroll. Touch targets >= 44 px.
+- **Autosave & Concurrency:** Autosave after 1.5 s idle or 10 s maximum wait. Concurrency via `If-Match` with 409 conflict banner ("Load the server version" vs "Keep mine"). Changes cached to IndexedDB draft (300 ms debounce).
+- **Deferred features (later):**
+  - Multi-page layout & canvas overlay: **later**.
+  - Layers & freeform annotations: **later**.
+  - Inline images and image paste: **later**.
+  - Chunks & chunk storage: **later**.
+  - Lock lease & fencing tokens: **later** (optimistic concurrency with `If-Match` is locked for v1).
 
 ### 2.4 Journeys the e2e suite must cover
 
 - **A.** Create, rename, delete a category with an optional cover.
-- **B.** Create an entry, write, format, insert an image, autosave, leave, reopen, content intact.
-- **C.** Add a layer, add objects, move, resize, rotate, reorder, hide, delete, save, reopen, same positions.
-- **D.** Same entry at laptop, tablet and phone widths: aspect ratio kept, objects stay put.
-- **E.** Export, import into a clean database, verify content and assets, unsupported items reported.
+- **B.** Create an entry, write, format, autosave, leave, reopen, content intact.
+- **C.** Selection toolbar, "/" menu, and keyboard shortcuts operate reliably across formats.
+- **D.** Same entry at laptop, tablet, and phone widths: layout adapts without horizontal scroll.
+- **E.** Concurrency conflict resolution (409) and offline draft restoration.
 
 ## 3. Decision log
 
@@ -109,17 +119,22 @@ The category screen displays entries as books lying flat in structured piles. Ne
 | --- | --- | --- |
 | Name | Kaaj | LOCKED |
 | Users | Single user, no user id columns | LOCKED |
-| Pages | Explicit pages, no auto-flow between pages | LOCKED |
-| Layers | Per page, soft caps 8 layers and 200 objects per page, as validation constants | DEFAULT |
-| Concurrency | Version check plus edit-lock lease with fencing token | LOCKED |
-| Realtime | No websockets. Debounced HTTP saves | LOCKED |
-| Spine size | `weight` stored on the entry row | LOCKED |
-| Body schema | Whitelist blocks and marks, palette-token colours | DEFAULT |
-| Video | Type reserved, disabled in UI for v1 | DEFAULT |
-| Overlay tech | SVG/DOM overlay preferred over Fabric.js | SPIKE |
-| Server runtime | Node. Bun as package manager and script runner | DEFAULT |
+| Editor Layout | Single continuous rich-text column (~760 px) on paper style | LOCKED |
+| Document Format | ProseMirror JSON envelope v2 with strict Zod whitelist | LOCKED |
+| Pages | Single continuous scroll in v1. Multi-page fixed ratio deferred | later |
+| Layers | Per-page decoration layers deferred | later |
+| Canvas & Overlay | Freeform object positioning deferred | later |
+| Images in Editor | Inline images & image paste deferred | later |
+| Chunks | Chunk storage deferred | later |
+| Edit Lock | Lock lease deferred; optimistic `If-Match` with 409 resolution used | later / LOCKED |
+| Concurrency | Version check (`If-Match: <version>`) with 409 conflict UI | LOCKED |
+| Realtime | No websockets. Debounced HTTP saves with draft backup | LOCKED |
+| Spine size | `weight` stored on entry row, derived from text content | LOCKED |
+| Body schema | Whitelist blocks and marks, palette-token colours | LOCKED |
+| Video | Type reserved, disabled in UI | DEFAULT |
+| Server runtime | Node/Bun compatible Hono API | DEFAULT |
 | Hosting | Deferred until local works well | LOCKED |
-| Testing | End-to-end only, no unit tests | LOCKED |
+| Testing | End-to-end only (Playwright), no unit tests | LOCKED |
 
 ## 4. Tech stack
 
@@ -171,62 +186,47 @@ kaaj/
 
 ## 6. Document model
 
-### 6.1 Page and overflow (LOCKED)
+### 6.1 Layout & Continuous Structure (v1 LOCKED)
 
-- A document is an ordered list of pages. Each page has a logical size (default 1200 by 1600, ratio 3:4), a background, one `body` and its own `layers`.
-- Text does not flow between pages. When a page is full, the editor shows "page full" and offers **Add page**. Nothing is silently clipped.
-- The page's content area height is defined in logical units and measured in the editor.
-- All stored positions and sizes are in page-relative logical units. Never store screen pixels. The browser scales the page, keeping the ratio. Rotation is in degrees, clockwise.
-- Z-order is array order: later items draw on top.
+- An entry is a single continuous rich-text document. It scrolls without page boundaries.
+- Multi-page layout, fixed aspect ratio frames, and canvas overlays are deferred to **later**.
 
-### 6.2 Envelope
+### 6.2 Envelope (schemaVersion: 2)
 
 ```json
 {
-  "schemaVersion": 1,
-  "pages": [
-    {
-      "id": "p_1",
-      "size": { "width": 1200, "height": 1600 },
-      "background": { "type": "solid", "token": "paper" },
-      "body": { "format": "kaaj-rich-text-v1", "content": [] },
-      "layers": [
-        {
-          "id": "l_1", "name": "Decorations", "visible": true, "locked": false,
-          "objects": [
-            {
-              "id": "o_1", "type": "image", "assetId": "a_1",
-              "transform": { "x": 100, "y": 120, "width": 240, "height": 180, "rotation": -4 },
-              "anchor": { "type": "page" },
-              "style": {}
-            }
-          ]
-        }
-      ]
-    }
-  ]
+  "schemaVersion": 2,
+  "doc": {
+    "type": "doc",
+    "content": [
+      {
+        "id": "blk_a1b2c3d4",
+        "type": "heading",
+        "attrs": { "level": 1, "textAlign": "left" },
+        "content": [{ "type": "text", "text": "Field Notes" }]
+      },
+      {
+        "id": "blk_e5f6g7h8",
+        "type": "paragraph",
+        "attrs": { "textAlign": "left" },
+        "content": [{ "type": "text", "text": "Software should age like paper and leather." }]
+      }
+    ]
+  }
 }
 ```
 
-### 6.3 Rules
+### 6.3 Document Rules & Schema Validation
 
-- Every page, layer, object and body block has a stable id.
-- Assets are referenced by asset id, never by URL or signed URL.
-- `anchor` is `{type:"page"}` in v1. The field is reserved for `{type:"block", id}` so content-anchored annotations need no migration later.
-- Object types v1: `image`, `sticker`, `text`, `line` (with arrow option), `shape` (rect, ellipse), `tape`. Freehand `doodle` is OPEN, default v1.1.
-- Validation constants (single file in `doc-model`): max layers per page, max objects per page, max pages per entry, max body size.
-- Unknown fields and types are preserved on import and migration, reported to the user, never silently dropped.
-- Schema changes need a migration function in `doc-model`. No ad hoc rewrites. Migrations are pure functions.
-
-### 6.4 Body schema `kaaj-rich-text-v1` (DEFAULT)
-
-- **Blocks:** `paragraph`, `heading` (levels 1 to 3), `bulletList`, `orderedList`, `blockquote`, `image`, `videoEmbed` (reserved, UI disabled), `divider`.
-- **Marks:** `bold`, `italic`, `underline`, `strike`, `link`, `textColor`, `highlight`.
-- Colours are palette tokens only. The token list lives in `design`.
-- Image block: `assetId`, `alt`, `width` as a fraction (0 to 1) of content width.
-- Video: provider plus video id, never raw embed HTML.
-- Links: only `http`, `https`, `mailto`.
-- Pasted content is sanitised to this whitelist. Anything else is dropped from the pasted text, not stored.
+- **Canonical Format:** ProseMirror JSON validated against a strict Zod whitelist in `@kaaj/doc-model`. Unwhitelisted node types, marks, or unknown attributes are rejected.
+- **Top-Level Block IDs:** Every top-level block possesses a stable unique string `id` (e.g. `blk_...`). If a block lacks an `id`, an MIT ProseMirror transaction plugin assigns one automatically.
+- **Node Whitelist:** `doc`, `paragraph`, `heading` (levels 1-3), `bulletList`, `orderedList`, `listItem`, `blockquote`, `horizontalRule`, `text`.
+- **Mark Whitelist:** `bold`, `italic`, `underline`, `strike`, `link` (validated for `http`, `https`, `mailto`), `textStyle` (`fontFamily`, `fontSize`, `color`), `highlight`.
+- **Palette Tokens:** Colors and highlights use design tokens defined in `@kaaj/design`. Text colors satisfy 4.5:1 contrast against `#fcfbf7`.
+- **Size Limits (`ENTRY_SIZE_LIMITS`):** Soft warning at 1 MB (calm banner in editor), hard rejection at 2 MB (HTTP 422 on API).
+- **Weight and Stats:** `calculateWeight()` computes entry thickness from character/word count. Stats include word count and asset count. Page counts are removed.
+- **Migration:** Pure function `migrateDocumentToV2(v1Doc)` converts v1 page bodies into top-level blocks and counts discarded decoration layers without crashing.
+- **Deferred features (later):** Layers, canvas objects, inline image blocks, video embeds, and block anchors.
 
 ## 7. Data model (PostgreSQL via Prisma)
 
@@ -274,14 +274,10 @@ kaaj/
 - Drag, resize and draw state stays local. Persist on pointer-up only.
 - v1 saves the whole document per request. Switch to per-page saves only if size becomes a measured problem.
 
-### 8.3 Edit lock (LOCKED)
+### 8.3 Edit lock (later)
 
-- Opening an entry for editing requests a lock. If another device holds it, the response is 423 and the client opens read-only.
-- **Lease:** expires after 90 s, renewed by a heartbeat every 30 s and by each save. A crashed device frees the lock on its own.
-- **Take over:** a button issues a new token and invalidates the old holder.
-- **Fencing:** every save must carry the current token and version. A device that woke from sleep with an expired lease is rejected, and its draft stays in IndexedDB for manual recovery.
-- The lock is for experience. The version check is what guarantees correctness. Keep both.
-- A read-only device may poll the entry every few seconds, or use server-sent events later. No websockets.
+- The lock lease mechanism (`POST /entries/:id/lock`, lease timeout, heartbeat, and takeover) is deferred to a **later** phase.
+- In v1, concurrency safety is provided through strict optimistic concurrency: `PUT /entries/:id` checks `If-Match: <version>`. When a conflict occurs, the API returns HTTP 409 and the frontend provides a conflict resolution banner allowing the user to inspect and select between "Load the server version" and "Keep mine". Local changes are always preserved in IndexedDB drafts so edits are never lost.
 
 ## 9. Assets and uploads
 

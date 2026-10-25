@@ -540,3 +540,70 @@ export const CURRENT_USER = {
 } as const;
 
 export { SEED_COVERS_MANIFEST, type SeedCoverMetadata } from './seed-covers/manifest.js';
+
+
+/* ========================================================================== */
+/* Editor Tokens: Fonts, Colors, Sizes & Contrast                              */
+/* ========================================================================== */
+
+export interface EditorColorToken {
+  id: string;
+  label: string;
+  value: string;
+}
+
+/**
+ * 10 curated text colors that strictly pass WCAG 4.5:1 contrast against paper (#fcfbf7).
+ */
+export const EDITOR_TEXT_COLORS: readonly EditorColorToken[] = [
+  { id: 'ink-charcoal', label: 'Ink Charcoal', value: '#1e1c1a' },
+  { id: 'terracotta-dark', label: 'Terracotta', value: '#8c3a1e' },
+  { id: 'forest-moss', label: 'Forest Moss', value: '#2b4731' },
+  { id: 'navy-slate', label: 'Navy Slate', value: '#203847' },
+  { id: 'deep-plum', label: 'Deep Plum', value: '#4e223b' },
+  { id: 'warm-espresso', label: 'Warm Espresso', value: '#3d2b1f' },
+  { id: 'rust-amber', label: 'Rust Amber', value: '#7c4411' },
+  { id: 'midnight-blue', label: 'Midnight Blue', value: '#1b2940' },
+  { id: 'dark-crimson', label: 'Dark Crimson', value: '#781f19' },
+  { id: 'muted-umber', label: 'Muted Umber', value: '#4a463f' },
+] as const;
+
+/**
+ * 10 curated highlight colors for washi paper aesthetics (uses dark text).
+ */
+export const EDITOR_HIGHLIGHT_COLORS: readonly EditorColorToken[] = [
+  { id: 'sun-yellow', label: 'Sun Yellow', value: '#fef08a' },
+  { id: 'mint-green', label: 'Mint Green', value: '#bbf7d0' },
+  { id: 'peach-coral', label: 'Peach Coral', value: '#fed7aa' },
+  { id: 'sky-mist', label: 'Sky Mist', value: '#bae6fd' },
+  { id: 'lavender-blush', label: 'Lavender Blush', value: '#e9d5ff' },
+  { id: 'soft-rose', label: 'Soft Rose', value: '#fecdd3' },
+  { id: 'warm-washi', label: 'Warm Washi', value: '#fef3c7' },
+  { id: 'sage-herb', label: 'Sage Herb', value: '#dcfce7' },
+  { id: 'sand-ochre', label: 'Sand Ochre', value: '#f5e6c8' },
+  { id: 'soft-lilac', label: 'Soft Lilac', value: '#ddd6fe' },
+] as const;
+
+export interface EditorFontToken {
+  id: string;
+  label: string;
+  family: string;
+  fontCategory: 'classic-serif' | 'clean-sans' | 'typewriter' | 'handwriting' | 'condensed-display' | 'elegant-display';
+}
+
+/**
+ * 6 font presets matching the book spines.
+ */
+export const EDITOR_FONTS: readonly EditorFontToken[] = [
+  { id: 'classic-serif', label: 'Classic Serif (Newsreader)', family: '"Newsreader", Georgia, serif', fontCategory: 'classic-serif' },
+  { id: 'clean-sans', label: 'Clean Sans (Inter)', family: '"Inter", system-ui, -apple-system, sans-serif', fontCategory: 'clean-sans' },
+  { id: 'typewriter', label: 'Typewriter (Special Elite)', family: '"Special Elite", monospace, serif', fontCategory: 'typewriter' },
+  { id: 'handwriting', label: 'Handwriting (Kalam)', family: '"Kalam", cursive, sans-serif', fontCategory: 'handwriting' },
+  { id: 'condensed-display', label: 'Condensed Display (Oswald)', family: '"Oswald", Impact, sans-serif', fontCategory: 'condensed-display' },
+  { id: 'elegant-display', label: 'Elegant Display (Playfair)', family: '"Playfair Display", Georgia, serif', fontCategory: 'elegant-display' },
+] as const;
+
+/**
+ * Stepped font sizes in px.
+ */
+export const EDITOR_FONT_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64] as const;

@@ -9,6 +9,9 @@ import {
   CreateEntrySchema,
   UpdateEntrySchema,
   calculateWeight,
+  calculateEntryStats,
+  ENTRY_SIZE_LIMITS,
+  migrateDocumentToV2,
 } from '@kaaj/doc-model';
 import { renderDocumentToPdf } from './services/pdf-service.js';
 import { CategoriesService } from './services/categories-service.js';
@@ -180,7 +183,7 @@ app.post('/entries', async (c) => {
       return c.json({ error: 'Category not found' }, 404);
     }
 
-    const entry = await categoriesService.createEntry(categoryId, title, color, pinned, spine);
+    const entry = await categoriesService.createEntry(categoryId, title, color, pinned, spine, parseResult.data.doc);
     return c.json(entry, 201);
   } catch (err: any) {
     return c.json({ error: err.message || 'Failed to create entry' }, 422);
@@ -226,34 +229,76 @@ app.post('/entries/:id/restore', async (c) => {
 
 app.put('/entries/:id', async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json();
+  const ifMatch = c.req.header('if-match');
+  let expectedVersion: number | undefined;
+  if (ifMatch) {
+    const parsed = parseInt(ifMatch.replace(/["W\/]/g, '').trim(), 10);
+    if (!Number.isNaN(parsed)) {
+      expectedVersion = parsed;
+    }
+  }
 
-  const parseResult = DocumentEnvelopeSchema.safeParse(body.doc);
+  let text = '';
+  try {
+    text = await c.req.text();
+  } catch {
+    return c.json({ error: 'Invalid body' }, 400);
+  }
+
+  if (Buffer.byteLength(text, 'utf8') > ENTRY_SIZE_LIMITS.MAX_BYTES) {
+    return c.json({ error: 'Document exceeds maximum size of 2 MB' }, 422);
+  }
+
+  let body: any;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  const rawDoc = body.doc !== undefined ? body.doc : body;
+
+  const parseResult = DocumentEnvelopeSchema.safeParse(rawDoc);
   if (!parseResult.success) {
     return c.json({ error: 'Validation failed', details: parseResult.error.format() }, 422);
   }
 
-  const doc = parseResult.data;
+  const docToSave = parseResult.data.schemaVersion === 2
+    ? parseResult.data
+    : migrateDocumentToV2(parseResult.data).doc;
 
-  // If entry exists in categoriesService, persist it there
+  const title = typeof body.title === 'string' ? body.title : undefined;
+
   const existing = await categoriesService.getEntry(id);
   if (existing) {
-    const result = await categoriesService.saveEntryDoc(id, doc);
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      return c.json({ error: 'Version conflict', currentVersion: existing.version }, 409);
+    }
+    const result = await categoriesService.saveEntryDoc(id, docToSave, expectedVersion, title);
+    if ('conflict' in result) {
+      return c.json({ error: 'Version conflict', currentVersion: result.currentVersion }, 409);
+    }
+    c.header('ETag', `"${result.entry.version}"`);
     return c.json({
       id: result.entry.id,
+      title: result.entry.title,
       version: result.entry.version,
       weight: result.entry.weight,
+      stats: result.entry.stats,
       saved: true,
     });
   }
 
-  // Fallback to spike in-memory store
   const current = entryStore.get(id);
-  const nextVersion = (current?.version ?? 0) + 1;
-  const weightVal = calculateWeight(doc);
+  const currentVersion = current?.version ?? 0;
+  if (expectedVersion !== undefined && currentVersion !== expectedVersion) {
+    return c.json({ error: 'Version conflict', currentVersion }, 409);
+  }
+  const nextVersion = currentVersion + 1;
+  const weightVal = calculateWeight(docToSave);
 
   entryStore.set(id, {
-    doc,
+    doc: docToSave,
     version: nextVersion,
     weight: weightVal,
   });
@@ -262,6 +307,7 @@ app.put('/entries/:id', async (c) => {
     id,
     version: nextVersion,
     weight: weightVal,
+    stats: calculateEntryStats(docToSave),
     saved: true,
   });
 });

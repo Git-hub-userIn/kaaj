@@ -13,11 +13,10 @@ import '@fontsource/playfair-display/700.css';
 
 import { HomeScreen } from './features/home/HomeScreen.js';
 import { CategoryStackScreen } from './features/category/CategoryStackScreen.js';
-import { EntryStubScreen } from './features/entry/EntryStubScreen.js';
 
-// Code-split heavy editor so home and category screens stay light
-const LazySpikeEditor = React.lazy(() =>
-  import('./features/editor/SpikeEditor.js').then((m) => ({ default: m.SpikeEditor }))
+// Code-split entry editor so home and catalogue stack screens stay light
+const LazyEntryEditor = React.lazy(() =>
+  import('./features/editor/EntryEditorScreen.js').then((m) => ({ default: m.EntryEditorScreen }))
 );
 
 export const App: React.FC = () => {
@@ -54,14 +53,13 @@ export const App: React.FC = () => {
   const entryMatch = currentPath.match(/^\/entry\/([^/]+)/);
   if (entryMatch) {
     const entryId = entryMatch[1];
-    return <EntryStubScreen entryId={entryId} onNavigateBack={() => window.history.back()} />;
-  }
-
-  // Route: /spike or /editor
-  if (currentPath === '/spike' || currentPath === '/editor') {
     return (
-      <Suspense fallback={<div style={{ padding: '32px', textAlign: 'center' }}>Loading editor...</div>}>
-        <LazySpikeEditor />
+      <Suspense fallback={<div style={{ padding: '32px', textAlign: 'center', fontFamily: 'serif' }}>Loading entry...</div>}>
+        <LazyEntryEditor
+          entryId={entryId}
+          onNavigateBack={() => window.history.back()}
+          onNavigateToCategory={(catId) => navigate(`/category/${catId}`)}
+        />
       </Suspense>
     );
   }
