@@ -33,7 +33,6 @@ interface BookSpineProps {
   onOpenSpineCustomizer?: (entryId: string) => void;
   onTogglePin: (entryId: string) => void;
   onDelete: (entryId: string) => void;
-  onPrefetch?: (entryId: string) => void;
   onHover?: (entry: EntryLightRow) => void;
   onFocusEntry?: (entry: EntryLightRow) => void;
 }
@@ -51,7 +50,6 @@ export const BookSpine: React.FC<BookSpineProps> = ({
   onOpenSpineCustomizer,
   onTogglePin,
   onDelete,
-  onPrefetch,
   onHover,
   onFocusEntry,
 }) => {
@@ -111,7 +109,6 @@ export const BookSpine: React.FC<BookSpineProps> = ({
   // Hover delay handling (250 ms delay, 100 ms leave delay per spec)
   const handlePointerEnter = (e: React.PointerEvent) => {
     setIsHovered(true);
-    onPrefetch?.(entry.id);
     onHover?.(entry);
 
     if (e.pointerType === 'touch') return;
@@ -148,7 +145,6 @@ export const BookSpine: React.FC<BookSpineProps> = ({
 
   const handleFocus = () => {
     setIsFocused(true);
-    onPrefetch?.(entry.id);
     onFocusEntry?.(entry);
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);

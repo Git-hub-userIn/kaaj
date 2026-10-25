@@ -243,13 +243,6 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     return () => window.removeEventListener('scroll', checkSticky);
   }, [loading]);
 
-  // Prefetch entry on hover/focus
-  const handlePrefetchEntry = useCallback((entryId: string) => {
-    fetch(`http://localhost:3001/entries/${entryId}`, {
-      headers: { Authorization: 'Bearer kaaj-local-dev-token' },
-    }).catch(() => {});
-  }, []);
-
   // Save scroll and navigate to entry
   const handleOpenEntry = useCallback(
     (entryId: string) => {
@@ -998,7 +991,6 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
                             onOpenSpineCustomizer={() => setCustomizingEntry(entry)}
                             onTogglePin={handleTogglePin}
                             onDelete={handleDeleteEntry}
-                            onPrefetch={handlePrefetchEntry}
                             onHover={handleBookHover}
                             onFocusEntry={handleBookFocus}
                           />
