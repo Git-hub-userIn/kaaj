@@ -455,6 +455,7 @@ test.describe('Kaaj Entry Editor (v1) Suite', () => {
 
     const editor = page.locator('.kaaj-editor-content');
     await expect(editor).toBeVisible();
+    await expect(page.locator('[data-testid="entry-title-input"]')).not.toHaveValue('', { timeout: 10000 });
 
     // Verify no horizontal scroll
     const hasHorizontalScroll = await page.evaluate(() => {
@@ -464,7 +465,7 @@ test.describe('Kaaj Entry Editor (v1) Suite', () => {
 
     // Select text to bring up mobile toolbar dock
     await editor.click();
-    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Home');
     await page.keyboard.down('Shift');
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('ArrowRight');
@@ -527,5 +528,34 @@ test.describe('Kaaj Entry Editor (v1) Suite', () => {
     await expect(page.locator('[data-testid="save-status-indicator"]')).toContainText('Saved');
 
     expect(consoleErrors).toEqual([]);
+  });
+
+  // Test 14: Save orderedList and bulletList with standard Tiptap attributes
+  test('14. Saving orderedList and bulletList succeeds without 422 validation errors', async ({ page, request }) => {
+    await page.goto('http://localhost:3000/entry/entry_food-recipes_6');
+    const editor = page.locator('.kaaj-editor-content');
+    await expect(editor).toBeVisible();
+
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('1. First recipe step');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Second recipe step');
+    await page.keyboard.press('Enter');
+
+    // Trigger immediate save
+    await page.keyboard.press('Control+s');
+    const saveIndicator = page.locator('[data-testid="save-status-indicator"]');
+    await expect(saveIndicator).toContainText('Saved', { timeout: 10000 });
+
+    // Verify GET returns valid envelope matching DocumentEnvelopeV2Schema
+    const getRes = await request.get('http://localhost:3001/entries/entry_food-recipes_6', {
+      headers: { Authorization: 'Bearer kaaj-local-dev-token' },
+    });
+    expect(getRes.ok()).toBeTruthy();
+    const body = await getRes.json();
+    const parse = DocumentEnvelopeV2Schema.safeParse(body.doc);
+    expect(parse.success).toBe(true);
   });
 });

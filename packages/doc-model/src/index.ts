@@ -169,7 +169,7 @@ export const EditorTextNodeSchema = z.object({
 export const EditorParagraphNodeSchema = z.object({
   type: z.literal('paragraph'),
   attrs: z.object({
-    id: z.string().optional(),
+    id: z.string().nullable().optional(),
     textAlign: z.enum(['left', 'center', 'right']).nullable().optional(),
   }).passthrough().optional(),
   content: z.array(EditorTextNodeSchema).optional(),
@@ -178,31 +178,33 @@ export const EditorParagraphNodeSchema = z.object({
 export const EditorHeadingNodeSchema = z.object({
   type: z.literal('heading'),
   attrs: z.object({
-    id: z.string().optional(),
+    id: z.string().nullable().optional(),
     level: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     textAlign: z.enum(['left', 'center', 'right']).nullable().optional(),
-  }).passthrough(),
+  }).passthrough().optional(),
   content: z.array(EditorTextNodeSchema).optional(),
 });
 
 export const EditorHorizontalRuleNodeSchema = z.object({
   type: z.literal('horizontalRule'),
   attrs: z.object({
-    id: z.string().min(1),
-  }).strict().optional(),
-}).strict();
+    id: z.string().nullable().optional(),
+  }).passthrough().optional(),
+});
 
 export const EditorBlockquoteNodeSchema = z.object({
   type: z.literal('blockquote'),
   attrs: z.object({
-    id: z.string().min(1),
-  }).strict().optional(),
+    id: z.string().nullable().optional(),
+    textAlign: z.enum(['left', 'center', 'right']).nullable().optional(),
+  }).passthrough().optional(),
   content: z.array(EditorParagraphNodeSchema).optional(),
-}).strict();
+});
 
 // List nodes
 export type EditorListItemNode = {
   type: 'listItem';
+  attrs?: Record<string, unknown>;
   content?: Array<EditorParagraphNode | EditorBulletListNode | EditorOrderedListNode>;
 };
 
@@ -213,19 +215,23 @@ export type EditorBlockquoteNode = z.infer<typeof EditorBlockquoteNodeSchema>;
 
 export type EditorBulletListNode = {
   type: 'bulletList';
-  attrs?: { id: string };
+  attrs?: Record<string, unknown>;
   content?: EditorListItemNode[];
 };
 
 export type EditorOrderedListNode = {
   type: 'orderedList';
-  attrs?: { id: string; start?: number };
+  attrs?: Record<string, unknown>;
   content?: EditorListItemNode[];
 };
 
 export const EditorListItemNodeSchema: z.ZodType<EditorListItemNode> = z.lazy(() =>
   z.object({
     type: z.literal('listItem'),
+    attrs: z.object({
+      id: z.string().nullable().optional(),
+      textAlign: z.enum(['left', 'center', 'right']).nullable().optional(),
+    }).passthrough().optional(),
     content: z.array(
       z.union([
         EditorParagraphNodeSchema,
@@ -233,28 +239,31 @@ export const EditorListItemNodeSchema: z.ZodType<EditorListItemNode> = z.lazy(()
         EditorOrderedListNodeSchema,
       ])
     ).optional(),
-  }).strict()
+  })
 );
 
 export const EditorBulletListNodeSchema: z.ZodType<EditorBulletListNode> = z.lazy(() =>
   z.object({
     type: z.literal('bulletList'),
     attrs: z.object({
-      id: z.string().min(1),
-    }).strict().optional(),
+      id: z.string().nullable().optional(),
+      textAlign: z.enum(['left', 'center', 'right']).nullable().optional(),
+    }).passthrough().optional(),
     content: z.array(EditorListItemNodeSchema).optional(),
-  }).strict()
+  })
 );
 
 export const EditorOrderedListNodeSchema: z.ZodType<EditorOrderedListNode> = z.lazy(() =>
   z.object({
     type: z.literal('orderedList'),
     attrs: z.object({
-      id: z.string().min(1),
-      start: z.number().int().optional(),
-    }).strict().optional(),
+      id: z.string().nullable().optional(),
+      start: z.number().int().nullable().optional(),
+      type: z.string().nullable().optional(),
+      textAlign: z.enum(['left', 'center', 'right']).nullable().optional(),
+    }).passthrough().optional(),
     content: z.array(EditorListItemNodeSchema).optional(),
-  }).strict()
+  })
 );
 
 export const TopLevelBlockSchema = z.union([
