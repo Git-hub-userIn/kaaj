@@ -21,9 +21,10 @@ blob-report/
 playwright/.cache/
 
 # Local asset storage & SQLite/DB files
-data/
-uploads/
-storage/
+/data/
+/data-backup-*/
+/uploads/
+/storage/
 *.db
 *.db-journal
 

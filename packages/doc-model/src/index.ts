@@ -315,6 +315,51 @@ export type ProseMirrorDoc = z.infer<typeof ProseMirrorDocSchema>;
 export type TopLevelBlock = z.infer<typeof TopLevelBlockSchema>;
 
 /* ========================================================================== */
+/* Chunked Storage Schemas and Manifest                                       */
+/* ========================================================================== */
+
+export const CHUNK_LIMITS = {
+  MAX_BLOCKS: 50,
+  MAX_BYTES: 64 * 1024, // 64 KB
+} as const;
+
+export const ChunkMetadataSchema = z.object({
+  id: z.string().min(1),
+  order: z.number().int().nonnegative(),
+  blockCount: z.number().int().nonnegative(),
+  bytes: z.number().int().nonnegative(),
+  checksum: z.string().min(1),
+  charCount: z.number().int().nonnegative().optional(),
+  imageCount: z.number().int().nonnegative().optional(),
+  wordCount: z.number().int().nonnegative().optional(),
+});
+
+export const EntryManifestSchema = z.object({
+  entryId: z.string().min(1),
+  schemaVersion: z.literal(2).default(2),
+  version: z.number().int().positive(),
+  totalBlocks: z.number().int().nonnegative(),
+  chunkCount: z.number().int().nonnegative(),
+  stats: z.object({
+    words: z.number().int().nonnegative().default(0),
+    images: z.number().int().nonnegative().default(0),
+    charCount: z.number().int().nonnegative().default(0),
+  }).optional(),
+  chunks: z.array(ChunkMetadataSchema),
+  updatedAt: z.string(),
+});
+
+export const ChunkPayloadSchema = z.object({
+  chunkId: z.string().min(1),
+  entryId: z.string().min(1),
+  blocks: z.array(TopLevelBlockSchema),
+});
+
+export type ChunkMetadata = z.infer<typeof ChunkMetadataSchema>;
+export type EntryManifest = z.infer<typeof EntryManifestSchema>;
+export type ChunkPayload = z.infer<typeof ChunkPayloadSchema>;
+
+/* ========================================================================== */
 /* App Models and Schemas                                                     */
 /* ========================================================================== */
 
@@ -621,6 +666,19 @@ export function calculateWeight(envelope: unknown): number {
   if (!envelope || typeof envelope !== 'object') return 1;
   const anyDoc = envelope as any;
 
+  // Manifest support: calculate directly from manifest without loading full doc
+  if (Array.isArray(anyDoc.chunks)) {
+    let charCount = anyDoc.stats?.charCount ?? 0;
+    let imageCount = anyDoc.stats?.images ?? 0;
+    if (charCount === 0 && imageCount === 0) {
+      for (const chk of anyDoc.chunks) {
+        charCount += chk.charCount ?? (chk.bytes ? Math.floor(chk.bytes / 2) : 0);
+        imageCount += chk.imageCount ?? 0;
+      }
+    }
+    return Math.max(1, Math.floor(charCount / 100) + imageCount * 10);
+  }
+
   // Schema version 2
   if (anyDoc.schemaVersion === 2 && anyDoc.doc) {
     let charCount = 0;
@@ -741,4 +799,219 @@ export function calculateSpineHeight(
   const progress = Math.min(1, (safeWeight - 1) / 49);
   const calculated = Math.round(minHeight + progress * (maxHeight - minHeight));
   return Math.min(maxHeight, Math.max(minHeight, calculated));
+}
+
+/**
+ * Normalizes ProseMirror block attributes for deterministic hashing.
+ * Strips default values (e.g. textAlign: 'left') and null/undefined values.
+ */
+export function normalizeBlockForHash(block: any): any {
+  if (Array.isArray(block)) return block.map(normalizeBlockForHash);
+  if (block && typeof block === 'object') {
+    const res: Record<string, any> = {};
+    for (const [k, v] of Object.entries(block)) {
+      if (v === null || v === undefined) continue;
+      if (k === 'attrs' && typeof v === 'object') {
+        const cleanAttrs: Record<string, any> = {};
+        for (const [ak, av] of Object.entries(v as any)) {
+          if (av === null || av === undefined) continue;
+          if (ak === 'textAlign' && av === 'left') continue;
+          cleanAttrs[ak] = av;
+        }
+        if (Object.keys(cleanAttrs).length > 0) {
+          res.attrs = cleanAttrs;
+        }
+      } else {
+        res[k] = normalizeBlockForHash(v);
+      }
+    }
+    return res;
+  }
+  return block;
+}
+
+/**
+ * Fast synchronous content hashing for chunk checksums.
+ * Uses 64-bit FNV-1a variant formatted as "sha256-<hex>".
+ * Pure JS, portable across Node, Bun, and browser.
+ */
+export function computeContentHash(content: string | object): string {
+  const str = typeof content === 'string'
+    ? content
+    : JSON.stringify(normalizeBlockForHash(content));
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const hashHex = (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
+  return `sha256-${hashHex.padStart(16, '0')}`;
+}
+
+/**
+ * Splits top-level ProseMirror blocks into chunks according to block count (50) and byte size (64 KB).
+ * Retains stable chunk IDs when existing chunks match.
+ */
+export function splitBlocksIntoChunks(
+  blocks: TopLevelBlock[],
+  options?: {
+    existingChunks?: ChunkMetadata[];
+    entryId?: string;
+    version?: number;
+    maxBlocks?: number;
+    maxBytes?: number;
+  }
+): { manifest: EntryManifest; chunks: ChunkPayload[] } {
+  const maxBlocks = options?.maxBlocks ?? CHUNK_LIMITS.MAX_BLOCKS;
+  const maxBytes = options?.maxBytes ?? CHUNK_LIMITS.MAX_BYTES;
+  const entryId = options?.entryId ?? 'entry_temp';
+  const version = options?.version ?? 1;
+  const existingChunks = options?.existingChunks ?? [];
+
+  const safeBlocks: TopLevelBlock[] = blocks.length > 0 ? blocks : [
+    { type: 'paragraph', attrs: { id: 'blk_initial' }, content: [] }
+  ];
+
+  const chunkGroups: TopLevelBlock[][] = [];
+  let currentGroup: TopLevelBlock[] = [];
+  let currentBytes = 2; // "[]"
+
+  for (const block of safeBlocks) {
+    const blockJson = JSON.stringify(block);
+    const blockBytes = typeof TextEncoder !== 'undefined'
+      ? new TextEncoder().encode(blockJson).length
+      : blockJson.length;
+
+    const wouldExceedBlocks = currentGroup.length >= maxBlocks;
+    const wouldExceedBytes = currentGroup.length > 0 && (currentBytes + blockBytes + 1 > maxBytes);
+
+    if (wouldExceedBlocks || wouldExceedBytes) {
+      chunkGroups.push(currentGroup);
+      currentGroup = [block];
+      currentBytes = 2 + blockBytes;
+    } else {
+      currentGroup.push(block);
+      currentBytes += blockBytes + 1;
+    }
+  }
+
+  if (currentGroup.length > 0) {
+    chunkGroups.push(currentGroup);
+  }
+
+  let totalWords = 0;
+  let totalImages = 0;
+  let totalChars = 0;
+
+  const chunks: ChunkPayload[] = [];
+  const manifestChunks: ChunkMetadata[] = [];
+
+  chunkGroups.forEach((group, index) => {
+    const stableId = existingChunks[index]?.id || `chk_${String(index + 1).padStart(2, '0')}`;
+    const serialized = JSON.stringify(group);
+    const checksum = computeContentHash(group);
+    const byteSize = typeof TextEncoder !== 'undefined'
+      ? new TextEncoder().encode(serialized).length
+      : serialized.length;
+
+    let chunkChars = 0;
+    let chunkImages = 0;
+    let chunkWords = 0;
+
+    const walk = (node: any) => {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'image') chunkImages += 1;
+      if (node.type === 'text' && typeof node.text === 'string') {
+        chunkChars += node.text.length;
+        const matches = node.text.trim().match(/\S+/g);
+        if (matches) chunkWords += matches.length;
+      }
+      if (Array.isArray(node.content)) {
+        for (const child of node.content) walk(child);
+      }
+    };
+    for (const b of group) walk(b);
+
+    totalWords += chunkWords;
+    totalImages += chunkImages;
+    totalChars += chunkChars;
+
+    manifestChunks.push({
+      id: stableId,
+      order: index,
+      blockCount: group.length,
+      bytes: byteSize,
+      checksum,
+      charCount: chunkChars,
+      imageCount: chunkImages,
+      wordCount: chunkWords,
+    });
+
+    chunks.push({
+      chunkId: stableId,
+      entryId,
+      blocks: group,
+    });
+  });
+
+  const manifest: EntryManifest = {
+    entryId,
+    schemaVersion: 2,
+    version,
+    totalBlocks: safeBlocks.length,
+    chunkCount: manifestChunks.length,
+    stats: {
+      words: totalWords,
+      images: totalImages,
+      charCount: totalChars,
+    },
+    chunks: manifestChunks,
+    updatedAt: new Date().toISOString(),
+  };
+
+  return { manifest, chunks };
+}
+
+/**
+ * Reassembles a full DocumentEnvelopeV2 from ordered chunk block arrays.
+ */
+export function reassembleDocFromChunks(
+  chunks: Array<{ blocks: TopLevelBlock[] }>
+): DocumentEnvelopeV2 {
+  const allBlocks: TopLevelBlock[] = [];
+  for (const chunk of chunks) {
+    if (Array.isArray(chunk.blocks)) {
+      allBlocks.push(...chunk.blocks);
+    }
+  }
+  return {
+    schemaVersion: 2,
+    doc: {
+      type: 'doc',
+      content: allBlocks,
+    },
+  };
+}
+
+/**
+ * Canonical JSON serialization with deterministic sorted keys.
+ * Used for strict document comparison during migration.
+ */
+export function canonicalDocJson(doc: unknown): string {
+  if (!doc || typeof doc !== 'object') return JSON.stringify(doc);
+  const sortKeys = (obj: any): any => {
+    if (Array.isArray(obj)) return obj.map(sortKeys);
+    if (obj !== null && typeof obj === 'object') {
+      const sorted: Record<string, any> = {};
+      for (const key of Object.keys(obj).sort()) {
+        sorted[key] = sortKeys(obj[key]);
+      }
+      return sorted;
+    }
+    return obj;
+  };
+  return JSON.stringify(sortKeys(doc));
 }

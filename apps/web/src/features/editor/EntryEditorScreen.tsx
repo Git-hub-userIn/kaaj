@@ -18,7 +18,6 @@ import {
 } from '@kaaj/design';
 import {
   ENTRY_SIZE_LIMITS,
-  type DocumentEnvelopeV2,
   type EntryStats,
 } from '@kaaj/doc-model';
 
@@ -31,8 +30,17 @@ import { SlashMenu } from './SlashMenu.js';
 import {
   loadEntryDocument,
   saveEntryDocument,
+  loadEntryManifest,
+  saveEntryChunk,
   type LoadedEntry,
+  type SaveResult,
 } from './storage/entry-storage.js';
+import {
+  type DocumentEnvelopeV2,
+  type TopLevelBlock,
+  type EntryManifest,
+  computeContentHash,
+} from '@kaaj/doc-model';
 import {
   saveDraft,
   getDraft,
@@ -94,6 +102,8 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   const saveQueuedRef = useRef(false);
   const retryCountRef = useRef(0);
   const titleInputRef = useRef<HTMLTextAreaElement>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const manifestRef = useRef<EntryManifest | null>(null);
 
   entryRef.current = entry;
   titleRef.current = title;
@@ -361,14 +371,64 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       setSaveStatus('saving');
       setSaveStatusText('Saving...');
 
+      // Check if we can save via a single dirty chunk
+      const manifest = manifestRef.current;
+      const currentBlocks = (currentDoc.doc.content || []) as TopLevelBlock[];
+      let singleDirtyChunkId: string | null = null;
+      let dirtyChunkBlocks: TopLevelBlock[] | null = null;
+
+      if (manifest && manifest.chunks.length > 0 && currentEntry.title === currentTitle) {
+        let blockOffset = 0;
+        let dirtyChunkCount = 0;
+
+        for (let i = 0; i < manifest.chunks.length; i++) {
+          const chk = manifest.chunks[i];
+          const isLast = i === manifest.chunks.length - 1;
+          const sliceEnd = isLast ? currentBlocks.length : blockOffset + chk.blockCount;
+          const slice = currentBlocks.slice(blockOffset, sliceEnd);
+          const sliceHash = computeContentHash(slice);
+
+          if (sliceHash !== chk.checksum) {
+            dirtyChunkCount++;
+            singleDirtyChunkId = chk.id;
+            dirtyChunkBlocks = slice;
+          }
+          blockOffset += chk.blockCount;
+        }
+
+        if (dirtyChunkCount !== 1) {
+          singleDirtyChunkId = null;
+          dirtyChunkBlocks = null;
+        }
+      }
+
       try {
-        const result = await saveEntryDocument(
-          currentEntry.id,
-          currentDoc,
-          currentEntry.version,
-          currentTitle,
-          options
-        );
+        let result: SaveResult;
+        if (singleDirtyChunkId && dirtyChunkBlocks) {
+          const chunkRes = await saveEntryChunk(
+            currentEntry.id,
+            singleDirtyChunkId,
+            dirtyChunkBlocks,
+            currentEntry.version
+          );
+          if (chunkRes.manifest) {
+            manifestRef.current = chunkRes.manifest;
+          }
+          result = chunkRes;
+        } else {
+          result = await saveEntryDocument(
+            currentEntry.id,
+            currentDoc,
+            currentEntry.version,
+            currentTitle,
+            options
+          );
+          loadEntryManifest(currentEntry.id)
+            .then((m) => {
+              if (m) manifestRef.current = m;
+            })
+            .catch(() => {});
+        }
 
         if (result.conflict) {
           // 409 conflict
@@ -409,6 +469,15 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         setSaveStatus('error');
         setSaveStatusText("Couldn't save Â· Retry");
 
+        // Save emergency draft to IndexedDB to prevent data loss
+        saveDraft({
+          entryId: currentEntry.id,
+          title: currentTitle,
+          doc: currentDoc,
+          baseVersion: currentEntry.version,
+          updatedAt: Date.now(),
+        }).catch(() => {});
+
         // Retry with backoff if network failure
         const nextRetry = Math.min(3, retryCountRef.current + 1);
         retryCountRef.current = nextRetry;
@@ -448,17 +517,34 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
     let isCancelled = false;
 
     async function init() {
+      setIsLoading(true);
       try {
-        const loaded = await loadEntryDocument(entryId);
+        const [loaded, manifest] = await Promise.all([
+          loadEntryDocument(entryId),
+          loadEntryManifest(entryId).catch(() => null),
+        ]);
         if (isCancelled) return;
 
         setEntry(loaded);
         setTitle(loaded.title);
+        manifestRef.current = manifest;
         lastSavedHashRef.current = computeDocHash(loaded.title, loaded.doc);
 
         if (editor) {
           editor.commands.setContent(loaded.doc.doc as any);
         }
+
+        // Restore scroll position if previously saved
+        try {
+          const savedY = sessionStorage.getItem(`kaaj_scroll_${entryId}`);
+          if (savedY) {
+            setTimeout(() => {
+              window.scrollTo({ top: parseInt(savedY, 10), behavior: 'instant' });
+            }, 100);
+          }
+        } catch {}
+
+        setIsLoading(false);
 
         // Check if there is an uncommitted newer draft in IndexedDB
         const draft = await getDraft(entryId);
@@ -475,6 +561,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
           setTimeout(() => titleInputRef.current?.focus(), 50);
         }
       } catch (err: any) {
+        setIsLoading(false);
         console.error('Failed to load entry:', err);
         const draft = await getDraft(entryId);
         if (draft && draft.doc) {
@@ -505,6 +592,17 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       isCancelled = true;
     };
   }, [entryId, editor, computeDocHash]);
+
+  // Remember scroll position across reloads
+  useEffect(() => {
+    const handleScroll = () => {
+      try {
+        sessionStorage.setItem(`kaaj_scroll_${entryId}`, String(window.scrollY));
+      } catch {}
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [entryId]);
 
   // Save on blur, visibilitychange, and pagehide
   useEffect(() => {
@@ -990,6 +1088,25 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
             }}
           >
             {sizeError}
+          </div>
+        )}
+
+        {/* Loading Indicator for Large Documents */}
+        {isLoading && !entry && (
+          <div
+            data-testid="loading-state"
+            style={{
+              padding: '24px 0',
+              color: COLOR_TOKENS.inkMuted,
+              fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+              fontSize: '14px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            <RefreshCw size={14} className="spin" aria-hidden="true" />
+            <span>Loading entry...</span>
           </div>
         )}
 

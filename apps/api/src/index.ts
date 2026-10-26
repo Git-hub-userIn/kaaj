@@ -279,6 +279,74 @@ app.put('/entries/:id', async (c) => {
   });
 });
 
+// Chunked Storage Endpoints (per spec v0.2 Step 3)
+app.get('/entries/:id/manifest', async (c) => {
+  const id = c.req.param('id');
+  const manifest = await categoriesService.getEntryManifest(id);
+  if (!manifest) {
+    return c.json({ error: 'Entry or manifest not found' }, 404);
+  }
+  c.header('ETag', `"${manifest.version}"`);
+  return c.json(manifest);
+});
+
+app.get('/entries/:id/chunks/:chunkId', async (c) => {
+  const id = c.req.param('id');
+  const chunkId = c.req.param('chunkId');
+  const chunk = await categoriesService.getEntryChunk(id, chunkId);
+  if (!chunk) {
+    return c.json({ error: 'Chunk not found' }, 404);
+  }
+  return c.json(chunk);
+});
+
+app.put('/entries/:id/chunks/:chunkId', async (c) => {
+  const id = c.req.param('id');
+  const chunkId = c.req.param('chunkId');
+
+  const ifMatch = c.req.header('if-match');
+  let expectedVersion: number | undefined;
+  if (ifMatch) {
+    const parsed = parseInt(ifMatch.replace(/["W\/]/g, '').trim(), 10);
+    if (!Number.isNaN(parsed)) {
+      expectedVersion = parsed;
+    }
+  }
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  const blocks = Array.isArray(body.blocks) ? body.blocks : body;
+  if (!Array.isArray(blocks)) {
+    return c.json({ error: 'Payload must contain blocks array' }, 422);
+  }
+
+  try {
+    const result = await categoriesService.saveEntryChunk(id, chunkId, blocks, expectedVersion);
+    if ('conflict' in result) {
+      return c.json({ error: 'Version conflict', currentVersion: result.currentVersion }, 409);
+    }
+
+    c.header('ETag', `"${result.version}"`);
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to save chunk' }, 500);
+  }
+});
+
+app.post('/migrate', async (c) => {
+  try {
+    const res = await categoriesService.runMigration();
+    return c.json({ success: true, ...res });
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Migration failed' }, 500);
+  }
+});
+
 // Asset Endpoints
 app.post('/assets', async (c) => {
   try {

@@ -13,10 +13,23 @@ import type {
   MonthEntryCount,
   TodoItem,
 } from '@kaaj/doc-model';
-import { calculateWeight, calculateEntryStats, createEmptyDocument, migrateDocumentToV2 } from '@kaaj/doc-model';
+import {
+  calculateWeight,
+  calculateEntryStats,
+  createEmptyDocument,
+  migrateDocumentToV2,
+  splitBlocksIntoChunks,
+  reassembleDocFromChunks,
+  canonicalDocJson,
+  computeContentHash,
+  type EntryManifest,
+  type ChunkPayload,
+  type ChunkMetadata,
+} from '@kaaj/doc-model';
 import type { DocumentEnvelopeV2, TopLevelBlock } from '@kaaj/doc-model';
 import { SEED_COVERS_MANIFEST } from '@kaaj/design';
 import type { LocalDiskAssetStore } from '../stores/asset-store.js';
+import { migrateEntriesToChunks, type MigrationResult } from './migration-service.js';
 
 export interface EntryRecord {
   id: string;
@@ -823,12 +836,14 @@ const SEED_CATEGORIES_DATA: SeedCategorySpec[] = [
 export class CategoriesService {
   private categories: Map<string, Category> = new Map();
   private entries: Map<string, EntryRecord> = new Map();
+  private baseDataDir: string;
   private dataFilePath: string;
   private assetStore: LocalDiskAssetStore;
   private seedCoversDir: string;
   private initialized = false;
 
   constructor(baseDataDir: string, assetStore: LocalDiskAssetStore, seedCoversDir: string) {
+    this.baseDataDir = baseDataDir;
     this.dataFilePath = path.join(baseDataDir, 'db-store.json');
     this.assetStore = assetStore;
     this.seedCoversDir = seedCoversDir;
@@ -861,6 +876,23 @@ export class CategoriesService {
     );
     if (this.categories.size === 0 || ideasEntries.length < 60) {
       await this.seed();
+    }
+
+    // Auto-migrate entries to chunked storage if not yet migrated
+    try {
+      const entriesDir = path.join(this.baseDataDir, 'entries');
+      let needsMigration = false;
+      try {
+        const stats = await fs.stat(entriesDir);
+        if (!stats.isDirectory()) needsMigration = true;
+      } catch {
+        needsMigration = true;
+      }
+      if (needsMigration) {
+        await migrateEntriesToChunks(this.baseDataDir, Array.from(this.entries.values()));
+      }
+    } catch (migErr) {
+      console.warn('Initial chunk migration notice:', migErr);
     }
 
     this.initialized = true;
@@ -1204,12 +1236,308 @@ export class CategoriesService {
   }
 
   /**
+   * Run explicit migration with immutable backup.
+   */
+  async runMigration(): Promise<MigrationResult> {
+    await this.init();
+    return migrateEntriesToChunks(this.baseDataDir, Array.from(this.entries.values()));
+  }
+
+  /**
+   * Get manifest for an entry.
+   */
+  async getEntryManifest(id: string): Promise<EntryManifest | null> {
+    await this.init();
+    const entry = this.entries.get(id);
+    if (!entry || entry.deletedAt) return null;
+
+    const manifestPath = path.join(this.baseDataDir, 'entries', id, 'manifest.json');
+    try {
+      const raw = await fs.readFile(manifestPath, 'utf8');
+      return JSON.parse(raw);
+    } catch {
+      // Manifest does not exist on disk yet, generate from entry.doc
+      if (entry.doc) {
+        const v2Doc = entry.doc.schemaVersion === 2
+          ? entry.doc
+          : migrateDocumentToV2(entry.doc).doc;
+        const blocks = Array.isArray(v2Doc.doc?.content) ? v2Doc.doc.content : [];
+        const { manifest, chunks } = splitBlocksIntoChunks(blocks, {
+          entryId: id,
+          version: entry.version,
+        });
+
+        // Persist manifest and chunks
+        const entryDir = path.join(this.baseDataDir, 'entries', id);
+        const chunksDir = path.join(entryDir, 'chunks');
+        await fs.mkdir(chunksDir, { recursive: true });
+        for (const chk of chunks) {
+          const chkPath = path.join(chunksDir, `${chk.chunkId}.json`);
+          await fs.writeFile(chkPath, JSON.stringify(chk, null, 2), 'utf8');
+        }
+        await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+        return manifest;
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Get single chunk payload for an entry.
+   */
+  async getEntryChunk(entryId: string, chunkId: string): Promise<ChunkPayload | null> {
+    await this.init();
+    const entry = this.entries.get(entryId);
+    if (!entry || entry.deletedAt) return null;
+
+    const chunkPath = path.join(this.baseDataDir, 'entries', entryId, 'chunks', `${chunkId}.json`);
+    try {
+      const raw = await fs.readFile(chunkPath, 'utf8');
+      return JSON.parse(raw);
+    } catch {
+      // If chunk file is missing, ensure manifest is initialized
+      await this.getEntryManifest(entryId);
+      try {
+        const retryRaw = await fs.readFile(chunkPath, 'utf8');
+        return JSON.parse(retryRaw);
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  /**
+   * Save a single chunk with version concurrency check and atomic writes.
+   * Handles chunk splitting when blocks exceed limits, and chunk merging when blocks are deleted.
+   */
+  async saveEntryChunk(
+    entryId: string,
+    chunkId: string,
+    blocks: TopLevelBlock[],
+    expectedVersion?: number
+  ): Promise<
+    | { conflict: true; currentVersion: number }
+    | {
+        success: true;
+        chunkId: string;
+        version: number;
+        weight: number;
+        stats?: EntryStats;
+        manifest: EntryManifest;
+      }
+  > {
+    await this.init();
+    const entry = this.entries.get(entryId);
+    if (!entry || entry.deletedAt) {
+      throw new Error(`Entry "${entryId}" not found`);
+    }
+
+    if (expectedVersion !== undefined && entry.version !== expectedVersion) {
+      return { conflict: true, currentVersion: entry.version };
+    }
+
+    // Ensure manifest is loaded
+    let manifest = await this.getEntryManifest(entryId);
+    if (!manifest) {
+      throw new Error(`Failed to load manifest for entry "${entryId}"`);
+    }
+
+    const entryDir = path.join(this.baseDataDir, 'entries', entryId);
+    const chunksDir = path.join(entryDir, 'chunks');
+    await fs.mkdir(chunksDir, { recursive: true });
+
+    const chunkIndex = manifest.chunks.findIndex((c) => c.id === chunkId);
+    if (chunkIndex === -1 && manifest.chunks.length > 0) {
+      throw new Error(`Chunk "${chunkId}" not found in manifest`);
+    }
+
+    // Split or merge handling
+    const serializedBlocks = JSON.stringify(blocks);
+    const byteSize = new TextEncoder().encode(serializedBlocks).length;
+    const isOverLimit = blocks.length > 50 || byteSize > 64 * 1024;
+    const isEmpty = blocks.length === 0;
+
+    let updatedChunkIds: string[] = [];
+
+    if (isEmpty && manifest.chunks.length > 1) {
+      // Merge/delete empty chunk
+      manifest.chunks.splice(chunkIndex, 1);
+      try {
+        await fs.unlink(path.join(chunksDir, `${chunkId}.json`));
+      } catch {
+        // Ignore if file does not exist
+      }
+    } else if (isOverLimit) {
+      // Split chunk into multiple chunks
+      const { manifest: splitSubManifest, chunks: splitChunks } = splitBlocksIntoChunks(blocks, {
+        entryId,
+        version: entry.version + 1,
+      });
+
+      // Write each split chunk
+      for (let sIdx = 0; sIdx < splitChunks.length; sIdx++) {
+        const sc = splitChunks[sIdx];
+        const targetId = sIdx === 0 ? chunkId : `chk_${entryId}_${Date.now()}_${sIdx}`;
+        sc.chunkId = targetId;
+        const targetMeta = splitSubManifest.chunks[sIdx];
+        targetMeta.id = targetId;
+
+        const chkFile = path.join(chunksDir, `${targetId}.json`);
+        const tmpFile = `${chkFile}.tmp`;
+        await fs.writeFile(tmpFile, JSON.stringify(sc, null, 2), 'utf8');
+        await fs.rename(tmpFile, chkFile);
+        updatedChunkIds.push(targetId);
+      }
+
+      // Replace chunk in manifest with split chunk metadata
+      manifest.chunks.splice(chunkIndex, 1, ...splitSubManifest.chunks);
+    } else {
+      // Single chunk update: write ONLY this chunk file
+      const safeBlocks: TopLevelBlock[] = blocks.length > 0 ? blocks : [
+        { type: 'paragraph' as const, attrs: { id: 'blk_initial' }, content: [] }
+      ];
+      const payload: ChunkPayload = {
+        chunkId,
+        entryId,
+        blocks: safeBlocks,
+      };
+
+      const chkFile = path.join(chunksDir, `${chunkId}.json`);
+      const tmpFile = `${chkFile}.tmp`;
+      await fs.writeFile(tmpFile, JSON.stringify(payload, null, 2), 'utf8');
+      await fs.rename(tmpFile, chkFile);
+      updatedChunkIds.push(chunkId);
+
+      // Compute stats for this chunk
+      let chunkChars = 0;
+      let chunkImages = 0;
+      let chunkWords = 0;
+      const walk = (node: any) => {
+        if (!node || typeof node !== 'object') return;
+        if (node.type === 'image') chunkImages += 1;
+        if (node.type === 'text' && typeof node.text === 'string') {
+          chunkChars += node.text.length;
+          const matches = node.text.trim().match(/\S+/g);
+          if (matches) chunkWords += matches.length;
+        }
+        if (Array.isArray(node.content)) {
+          for (const child of node.content) walk(child);
+        }
+      };
+      for (const b of safeBlocks) walk(b);
+
+      const targetMeta = manifest.chunks[chunkIndex] || {
+        id: chunkId,
+        order: chunkIndex,
+        blockCount: safeBlocks.length,
+        bytes: byteSize,
+        checksum: computeContentHash(safeBlocks),
+      };
+
+      targetMeta.blockCount = safeBlocks.length;
+      targetMeta.bytes = byteSize;
+      targetMeta.checksum = computeContentHash(safeBlocks);
+      targetMeta.charCount = chunkChars;
+      targetMeta.imageCount = chunkImages;
+      targetMeta.wordCount = chunkWords;
+
+      if (chunkIndex === -1) {
+        manifest.chunks.push(targetMeta);
+      } else {
+        manifest.chunks[chunkIndex] = targetMeta;
+      }
+    }
+
+    // Re-index orders and sum totals
+    let totalBlocks = 0;
+    let totalWords = 0;
+    let totalImages = 0;
+    let totalChars = 0;
+
+    manifest.chunks.forEach((c, idx) => {
+      c.order = idx;
+      totalBlocks += c.blockCount;
+      totalWords += c.wordCount ?? 0;
+      totalImages += c.imageCount ?? 0;
+      totalChars += c.charCount ?? 0;
+    });
+
+    manifest.chunkCount = manifest.chunks.length;
+    manifest.totalBlocks = totalBlocks;
+    manifest.stats = {
+      words: totalWords,
+      images: totalImages,
+      charCount: totalChars,
+    };
+    manifest.version = entry.version + 1;
+    manifest.updatedAt = new Date().toISOString();
+
+    // Atomic manifest write
+    const manifestPath = path.join(entryDir, 'manifest.json');
+    const tmpManifestPath = `${manifestPath}.tmp`;
+    await fs.writeFile(tmpManifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    await fs.rename(tmpManifestPath, manifestPath);
+
+    // Update entry record
+    entry.version = manifest.version;
+    entry.weight = calculateWeight(manifest);
+    entry.stats = { words: totalWords, images: totalImages };
+    entry.updatedAt = manifest.updatedAt;
+
+    // Keep entry.doc in memory updated by reassembling chunks
+    const allChunkPayloads: ChunkPayload[] = [];
+    for (const c of manifest.chunks) {
+      try {
+        const raw = await fs.readFile(path.join(chunksDir, `${c.id}.json`), 'utf8');
+        allChunkPayloads.push(JSON.parse(raw));
+      } catch {
+        allChunkPayloads.push({ chunkId: c.id, entryId, blocks: [] });
+      }
+    }
+    entry.doc = reassembleDocFromChunks(allChunkPayloads);
+
+    this.entries.set(entryId, entry);
+    await this.persist();
+
+    return {
+      success: true,
+      chunkId,
+      version: entry.version,
+      weight: entry.weight,
+      stats: entry.stats,
+      manifest,
+    };
+  }
+
+  /**
    * Get full entry row by id (including doc).
    */
   async getEntry(id: string): Promise<EntryRecord | null> {
     await this.init();
     const entry = this.entries.get(id);
     if (!entry || entry.deletedAt) return null;
+
+    // Load from chunked manifest if available
+    const manifestPath = path.join(this.baseDataDir, 'entries', id, 'manifest.json');
+    try {
+      const rawManifest = await fs.readFile(manifestPath, 'utf8');
+      const manifest: EntryManifest = JSON.parse(rawManifest);
+      const chunksDir = path.join(this.baseDataDir, 'entries', id, 'chunks');
+      const chunkPayloads: ChunkPayload[] = [];
+      for (const chkMeta of manifest.chunks) {
+        const chunkFilePath = path.join(chunksDir, `${chkMeta.id}.json`);
+        const chunkRaw = await fs.readFile(chunkFilePath, 'utf8');
+        chunkPayloads.push(JSON.parse(chunkRaw));
+      }
+      entry.doc = reassembleDocFromChunks(chunkPayloads);
+      entry.weight = calculateWeight(manifest);
+      if (manifest.stats) {
+        entry.stats = { words: manifest.stats.words, images: manifest.stats.images };
+      }
+    } catch {
+      // Fall back to entry.doc
+    }
+
     return entry;
   }
 
@@ -1257,6 +1585,34 @@ export class CategoriesService {
       deletedAt: null,
       lastOpenedAt: now,
     };
+
+    // Persist initial manifest and chunks for new entry
+    try {
+      const v2Doc = (doc.schemaVersion === 2 ? doc : migrateDocumentToV2(doc).doc) as DocumentEnvelopeV2;
+      const blocks: TopLevelBlock[] = Array.isArray(v2Doc.doc?.content) ? v2Doc.doc.content : [];
+      const { manifest, chunks } = splitBlocksIntoChunks(blocks, {
+        entryId,
+        version: 1,
+      });
+
+      const entryDir = path.join(this.baseDataDir, 'entries', entryId);
+      const chunksDir = path.join(entryDir, 'chunks');
+      await fs.mkdir(chunksDir, { recursive: true });
+
+      for (const chk of chunks) {
+        const chkFile = path.join(chunksDir, `${chk.chunkId}.json`);
+        const tmpFile = `${chkFile}.tmp`;
+        await fs.writeFile(tmpFile, JSON.stringify(chk, null, 2), 'utf8');
+        await fs.rename(tmpFile, chkFile);
+      }
+
+      const manifestPath = path.join(entryDir, 'manifest.json');
+      const tmpManifest = `${manifestPath}.tmp`;
+      await fs.writeFile(tmpManifest, JSON.stringify(manifest, null, 2), 'utf8');
+      await fs.rename(tmpManifest, manifestPath);
+    } catch (chunkErr) {
+      console.warn('Failed to persist initial chunks for entry:', chunkErr);
+    }
 
     this.entries.set(entryId, newEntry);
     await this.persist();
@@ -1313,15 +1669,62 @@ export class CategoriesService {
       return { conflict: true, currentVersion: entry.version };
     }
 
-    const calculatedWeight = calculateWeight(doc);
+    const v2Doc = doc.schemaVersion === 2 ? doc : migrateDocumentToV2(doc).doc;
+    const blocks: TopLevelBlock[] = Array.isArray(v2Doc.doc?.content) ? v2Doc.doc.content : [];
+
+    // Get existing manifest if present to preserve stable chunk ids
+    const manifestPath = path.join(this.baseDataDir, 'entries', id, 'manifest.json');
+    let existingManifest: EntryManifest | null = null;
+    try {
+      const raw = await fs.readFile(manifestPath, 'utf8');
+      existingManifest = JSON.parse(raw);
+    } catch {}
+
+    const { manifest, chunks } = splitBlocksIntoChunks(blocks, {
+      entryId: id,
+      version: entry.version + 1,
+      existingChunks: existingManifest?.chunks,
+    });
+
+    const entryDir = path.join(this.baseDataDir, 'entries', id);
+    const chunksDir = path.join(entryDir, 'chunks');
+    await fs.mkdir(chunksDir, { recursive: true });
+
+    // Atomically write all chunks
+    const activeChunkIds = new Set(chunks.map((c) => c.chunkId));
+    for (const chk of chunks) {
+      const chkFile = path.join(chunksDir, `${chk.chunkId}.json`);
+      const tmpFile = `${chkFile}.tmp`;
+      await fs.writeFile(tmpFile, JSON.stringify(chk, null, 2), 'utf8');
+      await fs.rename(tmpFile, chkFile);
+    }
+
+    // Clean up old removed chunks
+    try {
+      const existingFiles = await fs.readdir(chunksDir);
+      for (const file of existingFiles) {
+        if (file.endsWith('.json')) {
+          const chkId = file.replace(/\.json$/, '');
+          if (!activeChunkIds.has(chkId)) {
+            await fs.unlink(path.join(chunksDir, file)).catch(() => {});
+          }
+        }
+      }
+    } catch {}
+
+    // Atomically write manifest
+    const tmpManifestPath = `${manifestPath}.tmp`;
+    await fs.writeFile(tmpManifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    await fs.rename(tmpManifestPath, manifestPath);
+
     entry.doc = doc;
     if (title !== undefined && title.trim()) {
       entry.title = title.trim();
     }
-    entry.weight = calculatedWeight;
+    entry.weight = calculateWeight(manifest);
     entry.stats = calculateEntryStats(doc);
-    entry.version += 1;
-    entry.updatedAt = new Date().toISOString();
+    entry.version = manifest.version;
+    entry.updatedAt = manifest.updatedAt;
 
     this.entries.set(id, entry);
     await this.persist();

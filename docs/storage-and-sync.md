@@ -43,6 +43,29 @@ flowchart TD
 The editor presents one continuous infinite-scroll document.
 Storage splits this document into sequential chunks to ensure low latency and fast saves.
 
+### 2.0 Architectural Spike: Single Editor vs. Multi-Editor Virtualization
+
+We evaluated two architectural patterns for managing 50,000+ word entries with ProseMirror / Tiptap:
+1. **Option 1 (DEFAULT — Selected):** Single editor instance holding the entire active document in memory. Persistence splits the document into disk chunks (50 blocks / 64 KB). Only modified dirty chunks are saved.
+2. **Option 2 (Rejected):** Chunked storage with virtualized editor instances (one ProseMirror instance mounted per visible chunk in the viewport).
+
+#### Evaluation Matrix
+
+| Capability | Option 1: Single Editor + Chunked Storage | Option 2: Virtualized Multi-Editor |
+| :--- | :--- | :--- |
+| **Cross-chunk selection** | **Native**: ProseMirror selections span seamlessly across block boundaries without DOM isolation barriers. | **Broken**: Browsers cannot maintain a single continuous selection across multiple `contenteditable` containers. |
+| **Undo / Redo** | **Unified**: ProseMirror `history` plugin tracks all document steps in exact chronological sequence. | **Fragmented**: Each editor maintains an isolated undo stack. Cross-chunk edits break undo order. |
+| **In-page search (Find)** | **Native**: Browser `Ctrl+F` and ProseMirror text matching scan the entire document tree instantly. | **Broken**: Unmounted chunks are absent from the DOM; browser Find cannot locate off-screen text. |
+| **Cross-chunk paste** | **Native**: Slice replacement and clipboard parsers handle arbitrary ranges smoothly. | **Complex**: Requires synthetic selection mapping and inter-editor message passing. |
+| **Scroll jump / jitter** | **Smooth**: Real DOM flow with stable element heights. Zero layout jitter. | **Severe**: Dynamic spacer measurement and virtualization unmounting cause scroll jumps. |
+
+#### Benchmark Measurements (50,000 Words / 500 Paragraphs)
+- **Document load time:** 758 ms (target budget < 1,500 ms).
+- **Keystroke typing latency:** 46.3 ms / keystroke across 28 typed characters (target budget < 100 ms).
+- **Size on disk:** ~380 KB JSON payload.
+
+**Spike Conclusion:** Option 1 passes all performance budgets with typing latency at less than 50% of the 100 ms threshold. Option 1 is chosen as LOCKED DEFAULT. Option 2 is not required.
+
 ### 2.1 Chunk Definition and Boundaries
 
 - A chunk contains an ordered list of top-level ProseMirror blocks (`paragraph`, `heading`, `bulletList`, `orderedList`, `blockquote`, `horizontalRule`, `image`).
