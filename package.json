@@ -14,7 +14,7 @@
     "dev:api": "bun --filter @kaaj/api dev",
     "dev:backend": "bun --filter @kaaj/api dev",
     "build": "bun run --filter \"*\" build",
-    "test:e2e": "bun --filter e2e test",
+    "test:e2e": "bun --filter @kaaj/e2e test",
     "typecheck": "bun run --filter \"*\" typecheck"
   },
   "devDependencies": {

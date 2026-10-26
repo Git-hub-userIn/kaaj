@@ -1,197 +1,170 @@
 # Kaaj — Product, Architecture & Agent Spec
 
-Working spec v0.1 · 23 Oct 2026 · Status: design phase. No implementation has started.
+Working spec v0.2 · 26 Oct 2026 · Status: Active implementation.
 
 ## 0. How to read this
 
-Audience: the owner and the coding agent (Antigravity). Section 16 is the agent's rulebook.
+Audience: the owner and the coding agent (Antigravity). Section 16 is the agent rulebook.
 
-Every decision carries a status: **LOCKED** (build it), **DEFAULT** (build it unless the owner changes it), **SPIKE** (decide after the Phase 0 prototype), **OPEN** (needs the owner).
-
-UI mockup of the category screen: https://claude.ai/artifact/SjgixyXDL6XPeYGy1YmizY (static, placeholder colours and fonts).
+Every decision carries an explicit status:
+- **LOCKED**: build it exactly as specified.
+- **DEFAULT**: build it unless the owner directs a change.
+- **SPIKE**: evaluate with a prototype before finalizing.
+- **OPEN**: needs a decision from the owner.
 
 ## 1. Product
 
-**Kaaj** (काज) is a personal visual scrapbook and journal web app. In Hindi, *kaaj* means work or task, and also the buttonhole in tailoring, a craft word. The app should feel like a handmade archive, not a productivity dashboard.
+**Kaaj** (काज) is a personal visual scrapbook and journal app. In Hindi, *kaaj* means work or task, and also the buttonhole in tailoring. The app must feel like a handmade archive, not a productivity dashboard.
 
 ### Principles (LOCKED)
 
-- Writing first, decoration optional. A new entry opens ready to type.
-- Visual discovery over folder admin: categories are recognised by imagery.
-- Progressive complexity: advanced decoration appears only when the user adds a layer.
-- The user owns the content: full export and import in a documented format.
-- Responsive by design on phone, tablet and laptop, not a shrunken desktop.
+- Writing first, decoration optional. A new entry opens ready for typing.
+- Visual discovery over folder administration: categories display imagery.
+- The document is one infinite-scroll rich text. It has no fixed pages and no layers.
+- Single user. Web codebase, later wrapped for Windows, macOS, iOS, and Android.
+- The user owns the content: export and import in a documented format.
+- Responsive design on phone, tablet, and laptop viewports.
 - App-owned document format. Tiptap JSON is never the canonical copy.
-- Snappy. Typing, dragging and navigation never wait on the network.
-- No unnecessary infrastructure. Single user, inexpensive, maintainable.
+- Snappy interactions. Typing and navigation never wait on the network.
+- Fast local vault storage paired with cloud backup.
 
 ### Non-goals for v1
 
-Real-time collaboration, multi-user accounts, automatic pagination, public sharing, a video platform, a full illustration suite, search, offline-first sync.
+Real-time collaboration across multiple users, user accounts, automatic pagination, public sharing, video hosting, freeform drawing canvas.
 
 ### Future (design must not block these)
 
-Read-only share links per entry (token to entry, outside the auth guard). Ownership via the auth seam (section 11). Search. Content-anchored annotations.
+Read-only share links per entry (token-based). Ownership via the auth seam. Full-text search. Content-anchored annotations. Native OS wrappers (Capacitor/Tauri/Electron).
 
 ## 2. Screens and journeys
 
 ### 2.1 Home: image-led category collage (LOCKED)
 
-- Categories shown as a collage of varied-size image cards, not identical folder tiles. Name is a small caption.
-- Missing cover image: designed placeholder (colour or simple composition), never a broken-image icon.
-- Create, rename, delete: discoverable and keyboard-accessible.
-- Narrow screens reflow into a usable composition. Never keep desktop coordinates.
-- Collage placement: DEFAULT derived from category id and sort order. Persist positions only if a drag-to-arrange feature is added later.
+- Categories show as a collage of varied-size image cards. The category name is a small caption.
+- Missing cover image: designed placeholder (color or composition), never a broken-image icon.
+- Create, rename, delete: discoverable and accessible via keyboard.
+- Narrow screens reflow into a clean column. Never retain desktop coordinates.
+- Collage placement: DEFAULT derived from category ID and sort order. Persist positions only if drag-to-arrange is added.
 
-### 2.2 Category: messy stack of books (LOCKED)
+### 2.2 Category: messy stack of books (LOCKED look, details DEFAULT)
 
-The category screen displays entries as books lying flat in structured piles. Newest entries appear at the top. Pinned entries appear first.
+- Entries display as books lying flat in structured piles. Title is on the left, date is on the right of each spine.
+- Thickness reflects entry **weight**, clamped between 44 px and 104 px.
+- Newest entries sit at the top. Pinned entries appear first.
+- Visual variation (left offset, tilt up to 1.2 degrees, spine color when unset) derives from a hash of the entry ID. Never store random visual noise. Titles stay horizontal and readable.
+- Multi-pile layout: entries divide into piles of 10 resting on wooden table strips with month or pile labels. Continuous vertical scroll.
+- Actions per book: open, rename, move category, customize spine, pin, delete. Open on click or tap. Menu via `...` button, long-press, or right-click.
+- Hover or focus displays a floating entry details card after 250 ms.
+- Accessibility: the stack is a semantic list of buttons. Tab order follows sort order.
 
-#### Layout and Breakpoints
-- **Desktop (>= 1280 px):** Three columns `[left rail ~220 px][stack ~900 px][right rail ~280 px]`, centred with equal margins.
-- **Tablet (1024 to 1279 px):** Left rail becomes a compact "Jump to" menu next to the sort control. Right rail becomes a collapsible section "About this catalogue" above the stack (expanded by default).
-- **Mobile (< 1024 px):** No rails. Full-width stack. "About this catalogue" section is collapsed by default on phones.
-- **Spacing:** Maintain at least 48 px between the header divider and the first book. Maintain at least 64 px below the last table strip. Maintain 32 px inside side padding. No parent element may clip props or floating cards. No horizontal scroll at 390, 768, 1100, 1280, or 1440 px.
+### 2.3 Editor: infinite-scroll rich text (LOCKED)
 
-#### Left Rail ("Jump to", >= 1280 px)
-- Sticky navigation list of piles (month labels under Date sort, "Pile N" otherwise) with entry counts.
-- Click scrolls smoothly (instant under reduced motion) and moves focus to the pile heading.
-- IntersectionObserver highlights the pile currently in view.
-- Bottom summary displays total entries, total words, and last edited timestamp.
-
-#### Right Rail (>= 1280 px) and "About this catalogue" section (< 1280 px)
-1. **Category Image:** Cover image formatted as a taped polaroid. Tilt angle is <= 3 degrees, derived from the category ID hash. The "Change cover" action opens the cover picker. Unset covers render a designed placeholder.
-2. **Category Details:** Displays entries, words, images, created date, and last edited date. Displays a 6-month entries-per-month visual bar strip with a visually hidden text table fallback.
-3. **Sticky Note Checklist:** Yellow paper style note with handwritten font. Contrast is 4.5:1 or higher. Supports add, toggle check, edit text, and delete actions. Maximum 12 items, 200 characters each. Text edits save after 1 second of idle time. Check toggles save immediately. Optimistic concurrency uses `If-Match` with 409 conflict handling.
-
-#### Floating Entry Details Card
-- Displays after 250 ms hover. Placed once at `pointer + (16, 16) px`. Does not follow pointer movement.
-- Entering another book hides the current card and opens the new card with a 100 ms leave delay.
-- Rendered in the top layer portal with pointer events disabled. Positioned strictly with CSS transforms.
-- Flips left or above near screen boundaries and stays inside a 12 px viewport margin.
-- Keyboard focus anchors the card to the right edge of the focused book. Escape dismisses the card. `aria-describedby` links the book and the card.
-- Displays full title (wrapped), last edited (relative and absolute), created date, and counts for words, pages, and images. Contrast is 4.5:1 or higher.
-- On touch devices, tapping opens the entry. Long-press displays details in the context menu header.
-
-#### The Stack: Look and Geometry
-- Books lie flat as true rectangles without skew or perspective.
-- Thickness reflects entry weight from `calculateSpineHeight(doc-model.weight())`, clamped between 44 px and 104 px.
-- Length spans 520 to 780 px on laptop screens. Adjacent books differ in length by at least 40 px. Horizontal offset reaches up to 120 px.
-- Bottom book of each pile has 0 degree rotation. Other books tilt up to 1.2 degrees (`|radians * length / 2| <= 6 px`). Adjacent books do not lean the same direction past 0.8 degrees.
-- Title fonts use one of five presets selected by ID hash unless `entry.spine.font` is set. Adjacent books do not share a font preset. Title text remains horizontal. Contrast exceeds 4.5:1 against the spine background. Light covers include darker border edges (>= 3:1 contrast against the page).
-- Physical props derived deterministically by ID hash: red pinned bookmark ribbon, yellow sticky flag, rubber band.
-- Piles split into groups of 10 entries resting on wooden table strips with contact shadows. Single continuous vertical scroll. Sticky slim header bar appears after the title scrolls away. Restores scroll position on back navigation. Light rows cap at 500 entries with a calm note.
-
-#### Book Actions
-- Real button list with `...` menu button, right-click, context menu key, and long-press support.
-- Menu actions: Open, Rename (inline), Move to catalogue, Customise spine, Pin/Unpin, Delete (soft delete with Undo toast).
-- Spine customisation modal: texture, color, font, finish, bands with live preview and contrast rules. Empty catalogue shows a dashed blank book button. Skeletons show during loading. Error state offers retry.
-
-### 2.3 Editor (v1 LOCKED)
-
-- **Layout:** Single continuous rich-text editor for the entire entry (`/entry/:id`). Single centred reading column (maximum width ~760 px) on the paper style background. Design tokens only, no hard-coded values.
-- **Top Bar:** "<- Category" link, large serif title field (placeholder "Untitled"), and quiet save status indicator on the right ("Saving...", "Saved · just now", "Couldn't save · Retry").
-- **Title Behaviour:** Saved with entry and displayed on the book spine. Enter key in title moves focus to body editor.
-- **Controls (Restrained):**
-  1. Floating selection toolbar: appears above text selection; hides on collapse or Escape key.
-  2. "/" menu: block insertion trigger at cursor position.
-  3. Keyboard shortcuts: standard formatting shortcuts (Ctrl/Cmd+B, I, U, Z, Shift+Z) and markdown rules (`# `, `- `, `1. `, `> `).
-- **Phone (<768 px):** Docked selection toolbar above on-screen keyboard (using `visualViewport`). Font family, font size, and text/highlight colours open in bottom sheets. No horizontal scroll. Touch targets >= 44 px.
-- **Autosave & Concurrency:** Autosave after 1.5 s idle or 10 s maximum wait. Concurrency via `If-Match` with 409 conflict banner ("Load the server version" vs "Keep mine"). Changes cached to IndexedDB draft (300 ms debounce).
-- **Deferred features (later):**
-  - Multi-page layout & canvas overlay: **later**.
-  - Layers & freeform annotations: **later**.
-  - Inline images and image paste: **later**.
-  - Chunks & chunk storage: **later**.
-  - Lock lease & fencing tokens: **later** (optimistic concurrency with `If-Match` is locked for v1).
+- Layout: single continuous rich-text column (maximum width ~760 px) on paper background.
+- Infinite scroll: no fixed pages, no page breaks, no "page full" warnings. Pages exist only inside storage as chunks.
+- No freeform layers or canvas overlays. Layers are postponed.
+- Typography: per-selection fonts and font sizes are allowed. Inline marks apply via selection toolbar.
+- Title: large serif title field at top. Title saves with the entry and renders on the book spine.
+- Visible save state: `Saving`, `Saved · just now`, `Couldn't save · Retry`.
+- Undo and redo support. Reduced-motion settings respected.
+- Mobile (<768 px): docked toolbar above on-screen keyboard (`visualViewport`). Touch targets >= 44 px.
 
 ### 2.4 Journeys the e2e suite must cover
 
 - **A.** Create, rename, delete a category with an optional cover.
-- **B.** Create an entry, write, format, autosave, leave, reopen, content intact.
-- **C.** Selection toolbar, "/" menu, and keyboard shortcuts operate reliably across formats.
-- **D.** Same entry at laptop, tablet, and phone widths: layout adapts without horizontal scroll.
-- **E.** Concurrency conflict resolution (409) and offline draft restoration.
+- **B.** Create an entry, type rich text, apply formatting marks and per-selection fonts, autosave, leave, reopen, verify text.
+- **C.** Insert images via paste, drag-and-drop, and toolbar button; resize image width; verify asset ID storage and thumbnail generation.
+- **D.** View entry across laptop, tablet, and phone viewports without horizontal scroll.
+- **E.** Edit large entry with chunked storage, verify smooth scrolling, fast typing, and reload persistence.
+- **F.** Verify sync states (0 local only, 1 upload, 2 editing), Yjs merge, and crash recovery from Google Drive backup.
 
 ## 3. Decision log
 
 | Topic | Decision | Status |
 | --- | --- | --- |
 | Name | Kaaj | LOCKED |
-| Users | Single user, no user id columns | LOCKED |
-| Editor Layout | Single continuous rich-text column (~760 px) on paper style | LOCKED |
-| Document Format | ProseMirror JSON envelope v2 with strict Zod whitelist | LOCKED |
-| Pages | Single continuous scroll in v1. Multi-page fixed ratio deferred | later |
-| Layers | Per-page decoration layers deferred | later |
-| Canvas & Overlay | Freeform object positioning deferred | later |
-| Images in Editor | Inline images & image paste deferred | later |
-| Chunks | Chunk storage deferred | later |
-| Edit Lock | Lock lease deferred; optimistic `If-Match` with 409 resolution used | later / LOCKED |
-| Concurrency | Version check (`If-Match: <version>`) with 409 conflict UI | LOCKED |
-| Realtime | No websockets. Debounced HTTP saves with draft backup | LOCKED |
-| Spine size | `weight` stored on entry row, derived from text content | LOCKED |
-| Body schema | Whitelist blocks and marks, palette-token colours | LOCKED |
-| Video | Type reserved, disabled in UI | DEFAULT |
-| Server runtime | Node/Bun compatible Hono API | DEFAULT |
-| Hosting | Deferred until local works well | LOCKED |
-| Testing | End-to-end only (Playwright), no unit tests | LOCKED |
+| Users | Single user, no multi-user accounts | LOCKED |
+| Platforms | Web first, wrapped later for Windows/Mac/iOS/Android | LOCKED |
+| Editor Layout | Single continuous infinite-scroll rich-text column (~760 px) | LOCKED |
+| Pages | No fixed pages in UI. Pages exist only inside storage as chunks | LOCKED |
+| Layers & Canvas | Postponed. No freeform objects or overlay canvas in v1 | LOCKED |
+| Images in Editor | Inline images via asset ID only. Paste, drop, button insert | LOCKED |
+| Storage Architecture | Local vault folder (notes + attachments) for fast lookup | LOCKED |
+| Cloud Storage | Google Drive holds bulk data and backups | LOCKED |
+| Hot Writes & Sync | Backend hot writes, SSE notifications to other devices | LOCKED |
+| Database | PostgreSQL on Render (metadata, spine weight, hot state) | LOCKED |
+| Sync States | State 0: local only, State 1: upload, State 2: editing | LOCKED |
+| Document Merging | Yjs CRDT performs merge operations | LOCKED |
+| Crash Recovery | Base state from Google Drive + local changes replay | LOCKED |
+| Spine Size | `weight` stored in DB, derived from content and stats | LOCKED |
+| Fonts | Per-selection fonts and sizes allowed via inline marks | LOCKED |
+| Server Runtime | Node and Bun compatible Hono API | DEFAULT |
+| Testing | End-to-end only via Playwright. No unit tests | LOCKED |
+| PDF Export | Headless Chromium via Playwright | DEFAULT |
+| Vault Path | User-configured directory or app data folder | OPEN |
+| Drive Auth Flow | OAuth2 user consent vs Service Account | OPEN |
 
 ## 4. Tech stack
 
-- **Frontend:** React, Vite, TypeScript, single-page app. Heavy editor code is lazy-loaded.
-- **Rich text:** Tiptap core, minimal extensions. Checked on tiptap.dev: the core editor and its open extensions are MIT. Paid features (cloud, collaboration, AI, version history) and subscription-gated Pro extensions are **not used**.
-- **Freeform layers:** SVG and DOM overlay with CSS transforms. Fabric.js is the fallback. Decide after the spike.
-- **Validation:** Zod schemas shared by web and api, from the `doc-model` package.
-- **Backend:** Hono with Zod and Prisma, running on Node. Hono is runtime-agnostic, so moving the API to Bun later is a runtime swap if the spike supports it.
-- **Bun:** package manager, script and tool runner. API on Bun only after the spike proves sharp, Prisma and uploads behave.
-- **Database:** PostgreSQL. Canonical document in `jsonb`. Prisma migrations.
-- **Assets:** S3-style `AssetStore` interface. Local disk implementation in development.
-- **Export render:** headless Chromium via Playwright in a separate Node process.
-- **Tests:** Playwright e2e.
-
-**Verify from official docs before relying on them** (not yet checked): Hono's current version, multipart and body-size handling, sharp on Bun, a zip library choice, any transform-handle library, Fabric.js version and licence if it is considered.
+- **Frontend:** React, Vite, TypeScript, single-page app.
+- **Rich text:** Tiptap core with MIT extensions. No paid or Pro extensions.
+- **Collaborative Sync & Merge:** Yjs CRDT for document state and chunk merge.
+- **Validation:** Zod schemas shared across web and api via `@kaaj/doc-model`.
+- **Backend:** Hono running on Node or Bun. Provides REST endpoints and SSE stream.
+- **Database:** PostgreSQL on Render. Stores categories, entry metadata, spine styles, weights, and hot sync logs.
+- **Local Storage:** Local vault file system structure for instant lookup and offline access.
+- **Cloud Bulk Storage & Backup:** Google Drive API for full backups and media archives.
+- **Image Processing:** `sharp` for magic byte validation, EXIF stripping, and WebP thumbnail generation.
+- **Export Engine:** Headless Chromium via Playwright.
+- **Tests:** Playwright end-to-end tests only.
 
 ## 5. Repository layout and module boundaries
-
-Split into a separate package only when two or more consumers share it, or a boundary must be enforced. Everything else is a folder inside an app. Do not create packages speculatively.
 
 ```
 kaaj/
   apps/
-    web/                React UI. No server code, no database access
-      src/features/     home, category, editor (richtext/, layers/), export
-      src/lib/          api client, save queue, draft store, small helpers
+    web/                React UI. No direct database or file system access
+      src/features/     home, category, editor (richtext, images), sync
+      src/lib/          api client, vault client, yjs provider, draft store
     api/                Hono server
-      src/routes/       thin: parse with Zod, call a service, reply
-      src/services/     entries, categories, assets, locks, export
-      src/stores/       asset-store interface and implementations
-      src/auth/         guard seam
+      src/routes/       thin route handlers: validate with Zod, invoke service
+      src/services/     entries, categories, assets, sync, export, drive
+      src/stores/       local vault store, drive client
+      src/auth/         single-user auth guard seam
   packages/
-    doc-model/          Zod schemas, schemaVersion, migrations, weight(). Pure
-    design/             design assets and tokens. No logic
-  e2e/                  Playwright tests
-  docs/                 this spec and any ADRs
+    doc-model/          Zod schemas, chunk types, migrations, weight(). Pure TS
+    design/             tokens, fonts, icons, seed covers. No components
+  e2e/                  Playwright e2e tests
+  docs/                 specs and technical documentation
 ```
 
 ### Boundary rules (LOCKED)
 
-- `doc-model` is pure TypeScript: no I/O, no React, no framework imports. It depends on Zod only.
-- `web` and `api` never import each other. They share only `doc-model` and `design`.
-- `design` holds **static design assets and tokens only**: colour and type tokens, spacing and radius scale, fonts, paper textures, icons, the sticker library, placeholder covers, and a manifest that names each asset by key. It contains no components and no business logic.
-- Components read colours, fonts and spacing from tokens. No hard-coded hex values or font names in components.
-- **User uploads are never design assets.** They go through the `AssetStore`, get database rows, and are referenced by asset id.
-- Convert between Tiptap and canonical format in exactly one place: the adapter in `apps/web/src/features/editor/richtext/`. No other code touches Tiptap JSON.
-- Shared UI primitives (button, menu, bottom sheet, dialog) live in one folder in `web` and are reused. Do not create a second version of a primitive.
-- Routes contain no business logic. Services receive dependencies (database, asset store) as arguments.
+- `doc-model` is pure TypeScript. It has no I/O, no React, and no framework dependencies. It depends only on Zod.
+- `web` and `api` never import each other. They share `doc-model` and `design`.
+- `design` contains static design assets and tokens only. It contains no components and no business logic.
+- User uploads are never design assets. Uploads pass through the asset store, receive an asset ID, and store in the vault.
+- Convert between Tiptap and canonical format only in the editor adapter.
+- Shared UI primitives live in one directory in `web` and are reused.
+- Routes contain no business logic. Services receive dependencies as arguments.
 
-## 6. Document model
+## 6. Document and chunk model
 
-### 6.1 Layout & Continuous Structure (v1 LOCKED)
+### 6.1 Infinite-scroll editor document (LOCKED)
 
-- An entry is a single continuous rich-text document. It scrolls without page boundaries.
-- Multi-page layout, fixed aspect ratio frames, and canvas overlays are deferred to **later**.
+- The user edits a single continuous document without visible page boundaries.
+- Every top-level block possesses a stable string ID (`blk_...`).
+- The canonical document format is ProseMirror JSON validated against `@kaaj/doc-model`.
 
-### 6.2 Envelope (schemaVersion: 2)
+### 6.2 Storage chunk model (LOCKED)
+
+- Documents split into chunks for storage and sync.
+- A chunk contains an ordered group of top-level blocks.
+- Chunks split by block count (DEFAULT 50 blocks) or serialized size (DEFAULT 64 KB).
+- Chunks load on demand as the user scrolls.
+- Chunks save independently to reduce network payload and disk I/O.
+- Chunk manifest records chunk sequence, chunk IDs, block counts, and checksums.
+
+### 6.3 Envelope Schema (schemaVersion: 2)
 
 ```json
 {
@@ -200,241 +173,170 @@ kaaj/
     "type": "doc",
     "content": [
       {
-        "id": "blk_a1b2c3d4",
         "type": "heading",
-        "attrs": { "level": 1, "textAlign": "left" },
+        "attrs": { "id": "blk_a1b2c3d4", "level": 1, "textAlign": "left" },
         "content": [{ "type": "text", "text": "Field Notes" }]
       },
       {
-        "id": "blk_e5f6g7h8",
         "type": "paragraph",
-        "attrs": { "textAlign": "left" },
-        "content": [{ "type": "text", "text": "Software should age like paper and leather." }]
+        "attrs": { "id": "blk_e5f6g7h8", "textAlign": "left" },
+        "content": [
+          { "type": "text", "text": "Writing in " },
+          {
+            "type": "text",
+            "text": "Newsreader serif",
+            "marks": [{ "type": "textStyle", "attrs": { "fontFamily": "newsreader" } }]
+          }
+        ]
       }
     ]
   }
 }
 ```
 
-### 6.3 Document Rules & Schema Validation
+### 6.4 Node and mark whitelist (LOCKED)
 
-- **Canonical Format:** ProseMirror JSON validated against a strict Zod whitelist in `@kaaj/doc-model`. Unwhitelisted node types, marks, or unknown attributes are rejected.
-- **Top-Level Block IDs:** Every top-level block possesses a stable unique string `id` (e.g. `blk_...`). If a block lacks an `id`, an MIT ProseMirror transaction plugin assigns one automatically.
-- **Node Whitelist:** `doc`, `paragraph`, `heading` (levels 1-3), `bulletList`, `orderedList`, `listItem`, `blockquote`, `horizontalRule`, `text`.
-- **Mark Whitelist:** `bold`, `italic`, `underline`, `strike`, `link` (validated for `http`, `https`, `mailto`), `textStyle` (`fontFamily`, `fontSize`, `color`), `highlight`.
-- **Palette Tokens:** Colors and highlights use design tokens defined in `@kaaj/design`. Text colors satisfy 4.5:1 contrast against `#fcfbf7`.
-- **Size Limits (`ENTRY_SIZE_LIMITS`):** Soft warning at 1 MB (calm banner in editor), hard rejection at 2 MB (HTTP 422 on API).
-- **Weight and Stats:** `calculateWeight()` computes entry thickness from character/word count. Stats include word count and asset count. Page counts are removed.
-- **Migration:** Pure function `migrateDocumentToV2(v1Doc)` converts v1 page bodies into top-level blocks and counts discarded decoration layers without crashing.
-- **Deferred features (later):** Layers, canvas objects, inline image blocks, video embeds, and block anchors.
+- **Blocks:** `doc`, `paragraph`, `heading` (levels 1-3), `bulletList`, `orderedList`, `listItem`, `blockquote`, `horizontalRule`, `image`.
+- **Image Block:** `assetId` (string), `alt` (string?), `width` (number, percentage 20-100%). Never stores URLs.
+- **Marks:** `bold`, `italic`, `underline`, `strike`, `link` (`http`, `https`, `mailto`), `textStyle` (`fontFamily`, `fontSize`, `color`), `highlight`.
+- **Palette Tokens:** Text colors and highlights use tokens from `@kaaj/design`. Text colors satisfy 4.5:1 contrast.
 
-## 7. Data model (PostgreSQL via Prisma)
+## 7. Data model (PostgreSQL & Local Vault)
 
-**Category:** id, title, description?, coverAssetId?, sortOrder, color?, todo (array of `{id, text, done}`, max 12 items, 200 chars each), version (int, starts at 1, optimistic concurrency via `If-Match`), createdAt, updatedAt, deletedAt? (soft delete).
+### PostgreSQL (Render)
 
-**CategoryStats (computed):** entries (int), words (int), images (int), createdAt (ISO), lastEditedAt (ISO), entriesPerMonth (array of `{month, label, count}` for last 6 calendar months).
+**Category:** id, title, description?, coverAssetId?, sortOrder, color?, todo (jsonb), version (int), createdAt, updatedAt, deletedAt?.
 
-**Entry:** id, categoryId (FK), title, doc (jsonb), schemaVersion, version (int, starts at 1), weight (int), sortOrder?, color? (palette token), pinned (bool), spine? (nullable SpineStyle), stats? (EntryStats), createdAt, updatedAt, lastOpenedAt?, deletedAt? (soft delete, DEFAULT keep 30 days).
+**CategoryStats (computed):** entries, words, images, createdAt, lastEditedAt, entriesPerMonth (6-month array).
 
-**Asset:** id, storageKey (generated, never the user's filename), mime, bytes, width?, height?, originalName?, checksum, createdAt. Thumbnails are derived, not rows.
+**Entry:** id, categoryId (FK), title, schemaVersion (int), version (int), weight (int), sortOrder, color?, pinned (bool), spine (jsonb), stats (jsonb), syncState (int: 0, 1, 2), chunkCount (int), createdAt, updatedAt, lastOpenedAt?, deletedAt?.
 
-**EntryAsset:** entryId, assetId. Rebuilt from the document on every save, in the same transaction. Used for safe deletion, orphan cleanup and export.
+**Asset:** id, storageKey, mime, bytes, width?, height?, originalName?, checksum, createdAt.
 
-**EntryLock:** entryId (unique), deviceId, token, expiresAt.
+**EntryAsset:** entryId, assetId. Tracks asset references for cleanup and export.
 
 ### Rules
 
-- Foreign keys and constraints on. Transactions wherever writes must succeed together.
-- Validate every id on the server. Never trust client-provided storage keys or asset metadata.
-- **Weight:** one function in `doc-model` from character count, image count and embed count. Clamping happens at render time. If the formula changes, a script recomputes all weights.
-- Category list and entry list queries never load `doc`. They return light rows (id, title, weight, updatedAt, color, pinned, sortOrder).
-- Delete an asset only if no EntryAsset row references it. Orphan cleanup is a periodic script.
+- Foreign keys and constraints remain active. Transactions protect multi-table writes.
+- `weight` stays in the PostgreSQL database row. The backend computes weight from character, word, and image counts.
+- Category and entry lists return light rows only. They never return chunk bodies.
 
-## 8. Saving and concurrency
+## 8. Storage, sync, and concurrency
 
-### 8.1 API (all JSON except uploads and exports)
+### 8.1 Multi-tier storage architecture (LOCKED)
 
-- `GET/POST /categories`, `PATCH/DELETE /categories/:id` (PATCH validates `If-Match`, returns 409 on version conflict)
-- `GET /categories/:id` (returns `ETag: "<version>"` header)
-- `GET /categories/:id/stats` (returns category stats and 6-month entries-per-month histogram)
-- `GET /categories/:id/entries` (light rows, capped at 500)
-- `POST /entries`, `GET /entries/:id`, `PUT /entries/:id` (save document), `PATCH /entries/:id` (title, category, colour, pin, sortOrder, spine), `DELETE /entries/:id` (soft), `POST /entries/:id/restore`
-- `POST /entries/:id/lock`, `POST /entries/:id/lock/heartbeat`, `DELETE /entries/:id/lock`, `POST /entries/:id/lock/takeover`
-- `POST /assets` (multipart), `GET /assets/:id`, `GET /assets/:id/thumb?size=`
-- `POST /export`, `POST /import` (validate and preview first, then confirm)
-- Errors: 409 version conflict, 423 locked by another device, 413 too large, 415 unsupported type, 422 validation.
+1. **Local Vault Folder:** Fast disk storage on the user device. Contains notes, chunks, attachments, and manifests.
+2. **PostgreSQL on Render:** Stores metadata, spine weight, sync logs, and active editing state. Handles hot writes.
+3. **Google Drive:** Holds bulk data, media archives, and complete system backups. Protects against Render database loss.
 
-### 8.2 Save flow (LOCKED)
+### 8.2 Sync states (LOCKED)
 
-- The client saves after about 1.5 s idle, with a maximum wait of about 10 s, and flushes on blur, `visibilitychange` and `pagehide` (fetch with `keepalive`).
-- One save in flight at a time. Edits made meanwhile coalesce into the next save. Stale responses never overwrite newer local state.
-- `PUT /entries/:id` carries `If-Match: <version>` and `X-Lock-Token`. The server runs one atomic update: set doc, weight and EntryAsset rows, increment version, **where version equals the sent version**. Zero rows means 409.
-- The UI shows `Saved` only after the server returns the new version.
-- Every local change is also written to an IndexedDB draft. The draft is deleted after the server acknowledges. On a failed save or crash, the draft is offered for recovery.
-- Drag, resize and draw state stays local. Persist on pointer-up only.
-- v1 saves the whole document per request. Switch to per-page saves only if size becomes a measured problem.
+- **State 0: Local only.** Changes exist only in the local vault or IndexedDB draft. Not yet sent to backend.
+- **State 1: Upload.** Changes sent to backend. Backend persists hot write to database and vault, and queues Drive backup.
+- **State 2: Editing.** Active editing session. Changes stream via Yjs updates. Backend broadcasts updates via Server-Sent Events (SSE).
 
-### 8.3 Edit lock (later)
+### 8.3 Concurrency and Yjs merge (LOCKED)
 
-- The lock lease mechanism (`POST /entries/:id/lock`, lease timeout, heartbeat, and takeover) is deferred to a **later** phase.
-- In v1, concurrency safety is provided through strict optimistic concurrency: `PUT /entries/:id` checks `If-Match: <version>`. When a conflict occurs, the API returns HTTP 409 and the frontend provides a conflict resolution banner allowing the user to inspect and select between "Load the server version" and "Keep mine". Local changes are always preserved in IndexedDB drafts so edits are never lost.
+- Yjs CRDT handles document merges across devices and offline reconnection.
+- Edit-lock leases are removed. Multiple devices merge concurrent edits deterministically.
+- Backend acts as the central relay: receives Yjs update messages and broadcasts via SSE to active clients.
 
-## 9. Assets and uploads
+### 8.4 Crash recovery (LOCKED)
 
-- Upload flow: select or drop, server validates size and type, stores under a generated key, creates the Asset row, returns the id, the client inserts the id into the document.
-- DEFAULT limits: 20 MB per image. Allowed: JPEG, PNG, WebP, GIF. Verify file signatures (magic bytes), not only the declared MIME type. Strip EXIF. User-uploaded SVG is **not allowed in v1** (script risk). Built-in stickers in `design` may be SVG.
-- Generate WebP thumbnails (two sizes, DEFAULT 320 and 960 px wide) on upload. Home and stack screens use thumbnails. The editor loads originals only when needed.
-- A failed upload never leaves a dangling reference in the document.
-- Assets are private. Serve through an authenticated route or short-lived signed URLs. Never store signed URLs in documents.
-- The `AssetStore` interface has `put`, `get`, `delete`, `exists`. Implementations: local disk now, S3-compatible later. No other code touches storage directly.
-- Backups: the database and the asset files are separate backup jobs. Test restoring both.
+- If a client or backend crashes, restore the document from the Google Drive base state plus local changes.
+- Local IndexedDB drafts and vault journal replay uncommitted edits onto the base state.
+- Data loss must not occur.
+
+## 9. Assets and images
+
+### 9.1 Asset requirements (LOCKED)
+
+- Insertion: paste from clipboard, drag-and-drop into editor, or toolbar button file selection.
+- Validation: inspect file magic bytes (signatures), enforce 20 MB size limit, allow JPEG, PNG, WebP, GIF. Reject SVG uploads.
+- Sanitization: strip EXIF metadata using `sharp`.
+- Thumbnails: generate WebP thumbnails (320 px and 960 px widths) on upload.
+- Document reference: doc stores asset ID only (`assetId`), never a file URL or signed URL.
+- Resize control: inline image displays width resize handle (20% to 100% column width).
+- Failure safety: a failed upload removes the placeholder node immediately. No dangling references exist in the document.
 
 ## 10. Export and import
 
-- **Full archive (first):** ZIP with `manifest.json` (schema version, export version, counts), `categories/<id>.json`, `entries/<id>.json`, `assets/<assetId>.<ext>`. Stable ids, relative paths, no signed URLs.
-- **Import:** validate the archive first, prevent path traversal, handle duplicate ids and missing files, non-destructive by default, show a report of anything unsupported or missing. Never overwrite without explicit confirmation.
-- **Markdown (second):** text, headings, lists, links and inline images to `assets/` with relative paths. A companion metadata file records what Markdown cannot hold (layers, rotations, colours). Documented as lossy.
-- **HTML and PDF or image (last):** rendered by headless Chromium from the real page, so fonts, layers and rotation match. Wait for fonts and images to load. Report failures, never omit silently. PDF is a rendering, not a backup.
-- Required round-trip: export an entry with formatted text, images, several layers and rotated objects, import into an empty database, compare the canonical documents. Only documented normalisations may differ.
+- **Full archive:** ZIP with `manifest.json`, `categories/<id>.json`, `entries/<id>/`, and `assets/<assetId>.<ext>`.
+- **Markdown:** plain Markdown text, relative asset references, companion frontmatter.
+- **PDF:** rendered via headless Chromium through Playwright.
 
-## 11. Authentication
+## 11. Authentication (LOCKED)
 
-- Build an **auth seam**: one guard in `apps/api/src/auth/` that turns a request into `{ subject }`. Nothing else in the app knows how authentication works.
-- Local development: the guard accepts a fixed dev token from an environment variable. It is disabled when `NODE_ENV` is production.
-- Later: replace the guard internals with Cloudflare Access JWT validation, or generic OIDC (verify signature against the issuer's keys, plus issuer and audience). Per Cloudflare's docs, the origin must validate the `Cf-Access-Jwt-Assertion` header and its `aud` tag, not trust it blindly.
-- No ownership columns now. Pass `subject` into services so ownership checks can be added in one place.
-- Share links, when added, are a separate read-only route with its own token, outside the guard.
-- Do not build login screens or password storage.
+- Single-user application.
+- Auth seam: single guard in `apps/api/src/auth/` validating request tokens.
+- Development uses `AUTH_TOKEN` from environment variables.
+- Production uses secure token or Cloudflare Access header validation.
+- Do not build multi-user tables or login credential systems.
 
-## 12. Performance rules (snappy UI)
+## 12. Performance rules
 
-These are requirements, not suggestions.
-
-- Optimistic UI: local edits apply immediately. Network work is in the background and never blocks typing or dragging.
-- Active drag, resize and draw interactions run on refs and CSS `transform`, not React state per pointer move. Commit on pointer-up.
-- Move with `transform` and `opacity` only. Use `will-change` only during an interaction. No animating layout properties.
-- Re-render narrowly: each layer object is memoised and keyed by id. Selecting one object must not re-render the page. Keep editor state out of top-level React state.
-- Code-split the editor and layer renderer. Home and category screens do not load them.
-- Images: thumbnails with explicit width and height, lazy loading, originals only in the editor.
-- Cache lists with stale-while-revalidate. Prefetch an entry on hover or focus.
-- Virtualise lists only if measured slow.
-- Initial budgets (tune after the spike): interaction response under 100 ms, home route JavaScript under about 150 KB gzipped, editor lazy chunk loaded on demand, 60 fps while dragging with 200 objects on a mid-range phone.
-- Measure first. No caching systems or state libraries without a measured problem.
+- Typing must remain instant (<16 ms frame budget). Network saves happen asynchronously in the background.
+- Infinite scroll virtualizes rendered blocks when block count exceeds threshold.
+- Large documents load initial chunks immediately, then stream remaining chunks.
+- Images use lazy loading and WebP thumbnails.
 
 ## 13. Accessibility and security
 
-**Accessibility**
+- Complete keyboard navigation for all editor commands and stack interactions.
+- Visible focus indicators. Minimum 4.5:1 text contrast.
+- Input validation via Zod on both client and server.
+- File magic bytes verification prevents malicious file uploads.
 
-- Every action available by keyboard. Visible focus. Accessible names on icon-only controls. No state conveyed by colour alone. Reduced-motion respected.
-- Category collage and entry stack are keyboard navigable.
-- Dragging is never the only way to position an object: provide nudge keys or numeric fields.
-- Layers are manageable from a list panel even if the page is drawn visually.
-- Text contrast 4.5:1 or better. Decorative images have empty alt text. Meaningful ones have descriptions.
+## 14. Testing policy (LOCKED)
 
-**Security**
+- **No unit tests.** All verification is Playwright end-to-end tests.
+- Pure functions in `doc-model` are covered through e2e workflows and fixture data.
+- Required e2e coverage:
+  - Create, format, save, and reload entries.
+  - Image paste, drop, button insert, resize, and failed upload cleanup.
+  - Infinite scroll and chunked storage with very large entries.
+  - Sync states and crash recovery simulation.
+  - Responsive viewports (390 px, 768 px, 1440 px).
+- Tests must pass before completing each step.
 
-- Secrets only in server environment variables. Validate all input on the server with Zod.
-- Sanitise HTML and pasted content. Restrict upload size and type. Never fetch arbitrary remote URLs server-side (SSRF).
-- Validate archive paths on import. Do not log note content, uploads or credentials.
-- Back up the database before destructive migrations.
+## 15. Implementation phases
 
-## 14. Testing (end-to-end only)
-
-- **LOCKED:** no unit tests. All verification is Playwright e2e, plus TypeScript type checking, linting and Zod runtime validation.
-- Consequence to respect: pure logic in `doc-model` (weight, migrations, validation) has no unit coverage. Keep those functions small and pure, and cover them through e2e flows with seeded fixtures, including a document saved at an older `schemaVersion` that must open and migrate correctly.
-- Required e2e suites:
-  - Journeys A to E from section 2.4.
-  - Save, reload, content intact. Autosave states, including a forced server failure and retry.
-  - Two browser contexts: lock (423, read-only), lease expiry, take over, stale save rejected (409).
-  - Responsive: phone, tablet, laptop viewports. Aspect ratio held, objects in place.
-  - Upload: success, too large, wrong type, failure mid-upload leaves no dangling reference.
-  - Export then import round trip on a clean database.
-  - Layer limits, page-full behaviour and Add page.
-  - Keyboard-only path through the main flows.
-- Tests use a dedicated empty database and asset folder per run. A phase is not done until its e2e tests pass.
-
-## 15. Phases
-
-**Phase 0: audit and spike.** Confirm tool versions and read the official docs for each library used. Prototype one rich-text page inside the fixed-ratio page, one layer with transforms, one image through upload, thumbnail and database, reload, one PDF render via Playwright, and 200 objects dragged at target frame rate. Run the same upload and thumbnail path on Node and on Bun. Decide the overlay technology and write down the result. *Exit:* text, overlay, responsive scaling, persistence and export work together with no architectural dead end.
-
-**Phase 1: foundations.** Monorepo, `doc-model` (schema, migrations, weight), `design` tokens, Prisma schema, auth seam with dev token, asset store. *Exit:* create, load, update and delete a category and entry through the API with no data loss, proven by e2e.
-
-**Phase 2: browsing.** Home collage, messy book stack, create, rename, move, delete flows, empty and loading states, responsive layout, keyboard access. *Exit:* categories and entries are findable on phone and laptop.
-
-**Phase 3: base editor.** Tiptap with the whitelist, adapter, inline images, autosave queue, IndexedDB draft, lock and version checks, paste sanitising, pages and page-full behaviour. *Exit:* ordinary multi-page writing works without any layers.
-
-**Phase 4: layers.** Add, rename, reorder, hide layers. Object types, selection, transforms, nudge controls, persistence, caps. *Exit:* layers survive reload and stay positioned at all viewport sizes.
-
-**Phase 5: export and import.** Archive first, then Markdown, then HTML and PDF. *Exit:* round trip verified on a clean database.
-
-**Phase 6: hardening.** Large entries, many assets, failure paths, backup and restore drill, bundle review. Fix what is found. Add no features.
+- **Phase 0: Spike.** (Completed). Runtime and tooling verification.
+- **Phase 1: Browsing.** (Completed). Home category collage and book stack.
+- **Phase 2: Base Editor.** (Completed). Continuous rich text, autosave, typography.
+- **Step 1 (Docs & Audit):** (Current). Update spec to v0.2, create `docs/storage-and-sync.md`, audit repo.
+- **Step 2 (Images in Editor):** Asset module, paste/drop/button, magic bytes, EXIF strip, thumbnails, resize handle, e2e tests.
+- **Step 3 (Infinite Scroll & Chunks):** Chunk storage, smooth scroll, migration from v2, large entry e2e tests.
+- **Step 4 (Sync & Backup):** Local vault integration, Google Drive backup, SSE updates, Yjs merge, crash recovery.
+- **Step 5 (OS Wrappers):** Package app for Windows, macOS, iOS, Android.
 
 ## 16. Rulebook for the coding agent (Antigravity)
 
 ### Workflow
 
-1. Read this spec and the repository state before changing anything. Reuse what exists.
-2. Work one phase at a time. State goal and scope in a few lines, implement the smallest complete change, run the e2e tests, review your own diff, report.
-3. Do not start a later phase early. Do not add features not listed in the current phase.
-4. Before relying on how any library, SDK or API behaves (Tiptap, Hono, Prisma, sharp, Playwright, Vite, Bun, Cloudflare), read its official documentation. Do not assume.
-5. If a decision marked OPEN blocks safe progress, ask. Otherwise pick the DEFAULT and record the assumption.
+1. Read this spec and repository state before making changes. Reuse existing code.
+2. Follow section 16: small modules, no overengineering, e2e tests only, no unit tests.
+3. Stop after each step and report. Never start the next step early.
+4. Read official docs before assuming library behavior (Tiptap, Hono, Prisma, Playwright, Vite, Yjs, Google Drive API).
+5. If a decision marked OPEN blocks progress, ask the user. Do not guess.
 
-### Keep modules separate and reusable
+### Architecture rules
 
-- Follow section 5 exactly. Respect the dependency directions. Do not let `web` import from `api` or the reverse.
-- **Design assets live in `packages/design` only**: tokens, fonts, textures, icons, stickers, placeholder covers, manifest. No logic, no components. Components consume tokens. No hard-coded colours or fonts in components.
-- User uploads are never mixed with design assets. They use the `AssetStore` and the database.
-- Tiptap conversion happens only in the adapter. Storage access happens only through the `AssetStore`. Authentication happens only in the guard.
-- Before writing a new component, helper or service, search for an existing one and reuse or extend it. One shared UI primitive per concern.
-- Keep features in their own folders. A feature may import shared primitives and `doc-model`, but not another feature's internals.
-
-### Do not overengineer
-
-- First ask whether the code needs to exist at all. Use the platform and installed dependencies before adding anything.
-- Prefer plain functions and straightforward code over new abstractions, plugin systems, generic engines, dependency injection containers, or state-management libraries.
-- Introduce an interface only where this spec names one (`AssetStore`, the auth guard) or where two real implementations exist.
-- Add a dependency only with a written reason. Do not add one because it is popular.
-- Do not build features for hypothetical future needs. The future items in section 1 only require that the design stays compatible.
-- Do not refactor unrelated code.
-- Simplicity never justifies removing validation, error handling, accessibility, security checks or e2e tests.
-
-### Testing
-
-- Write **no unit tests**. Write Playwright e2e tests as defined in section 14. Run them after every meaningful change.
-- Do not claim a feature is complete unless its e2e test passes. Never skip a failing test silently.
+- Respect module boundaries. `web` and `api` never import each other.
+- Design tokens live in `packages/design`.
+- All user uploads use the asset module and vault storage.
+- Tiptap conversions exist solely within the editor adapter.
+- Reuse shared primitives. Do not duplicate components.
 
 ### Data safety
 
-- Losing a user's notes is the worst possible failure. Saving and reopening content reliably outranks every visual feature.
-- Never destructive-migrate without a backup step. Never overwrite on import without confirmation.
-
-### Reporting
-
-End each phase with: what changed, key files, e2e tests run with results including failures, known limitations, dependencies added and why, and any data or backup concern.
-
-### Priority order if trade-offs are forced
-
-1. Safe, reliable saving and reopening.
-2. A pleasant, responsive base writing experience.
-3. A stable canonical document format.
-4. Correct, persistent freeform layers.
-5. Full-fidelity export and import.
-6. Image-led home and book-stack browsing.
-7. Decorative polish.
+- Note preservation is the highest priority.
+- Perform backups before schema migrations.
+- Failed operations must never corrupt existing documents.
 
 ## 17. Open items
 
-- Freehand doodles in v1 or v1.1.
-- Trash retention period and whether to expose a trash screen (default soft delete, 30 days).
-- Palette token names and values, and the sticker library source (must be licensed or self-made).
-- Overlay technology (spike result).
-- Whether the API moves to Bun after the spike.
-- Page default size and content-area margins.
-- Future: share links, search, content-anchored annotations, hosting and backup plan, SSO provider.
-
-### Resolved Decisions (LOCKED)
-- **Category Stack Overflow:** Single continuous vertical scroll. Entries divide into piles of 10 resting on wooden table strips with month or pile labels. Light rows cap at 500 entries.
-- **Spine Thickness:** Clamped between 44 px (minimum touch target) and 104 px (maximum spine height).
-- **Category Layout and Rails:** Three columns on >= 1280 px (`[left rail ~220 px][stack ~900 px][right rail ~280 px]`). Compact Jump to menu and collapsible "About this catalogue" section on 1024–1279 px. Full-width stack on < 1024 px (collapsed section on phones).
-- **Category Data and Concurrency:** Category model includes `todo` checklist (max 12 items, 200 chars) and `version`. `PATCH /categories/:id` checks `If-Match` and returns 409 on conflict. `GET /categories/:id/stats` supplies real totals and 6-month histogram.
-- **Floating Entry Details Card:** Rendered in top layer portal at `pointer + (16, 16) px` with transform placement only. Flips left/above with 12 px viewport margins. Anchor to book right edge on keyboard focus. Dismiss on Escape.
+1. **Local Vault Location:** Default path for local vault on desktop and mobile platforms.
+2. **Google Drive Authentication Flow:** OAuth2 user login with refresh tokens versus automated service account.
+3. **Chunk Threshold:** Exact boundary for splitting chunks (50 blocks vs 100 blocks, or byte threshold).
+4. **Drive Backup Frequency:** Trigger backup on every save, on sync state change, or on timer (e.g. every 15 minutes).
