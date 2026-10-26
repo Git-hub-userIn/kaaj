@@ -18,6 +18,8 @@ import { CategoriesService } from './services/categories-service.js';
 import { authGuard } from './auth/guard.js';
 import { BackupService } from './backup/backup-service.js';
 import { LocalFolderBackupTarget } from './backup/local-backup-target.js';
+import { pruneBackups } from './backup/backup-prune.js';
+import { checkBackupRepository } from './backup/backup-check.js';
 import {
   GoogleDriveBackupTarget,
   generateGoogleAuthUrl,
@@ -280,27 +282,32 @@ app.put('/entries/:id', async (c) => {
 
   const title = typeof body.title === 'string' ? body.title : undefined;
 
-  const existing = await categoriesService.getEntry(id);
-  if (!existing) {
-    return c.json({ error: 'Entry not found' }, 404);
-  }
+  try {
+    const existing = await categoriesService.getEntry(id);
+    if (!existing) {
+      return c.json({ error: 'Entry not found' }, 404);
+    }
 
-  if (expectedVersion !== undefined && existing.version !== expectedVersion) {
-    return c.json({ error: 'Version conflict', currentVersion: existing.version }, 409);
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      return c.json({ error: 'Version conflict', currentVersion: existing.version }, 409);
+    }
+    const result = await categoriesService.saveEntryDoc(id, docToSave, expectedVersion, title);
+    if ('conflict' in result) {
+      return c.json({ error: 'Version conflict', currentVersion: result.currentVersion }, 409);
+    }
+    c.header('ETag', `"${result.entry.version}"`);
+    return c.json({
+      id: result.entry.id,
+      title: result.entry.title,
+      version: result.entry.version,
+      weight: result.entry.weight,
+      stats: result.entry.stats,
+      saved: true,
+    });
+  } catch (err: any) {
+    console.error('PUT /entries/:id error:', err);
+    return c.json({ error: err.message || 'Failed to save entry' }, 500);
   }
-  const result = await categoriesService.saveEntryDoc(id, docToSave, expectedVersion, title);
-  if ('conflict' in result) {
-    return c.json({ error: 'Version conflict', currentVersion: result.currentVersion }, 409);
-  }
-  c.header('ETag', `"${result.entry.version}"`);
-  return c.json({
-    id: result.entry.id,
-    title: result.entry.title,
-    version: result.entry.version,
-    weight: result.entry.weight,
-    stats: result.entry.stats,
-    saved: true,
-  });
 });
 
 // Chunked Storage Endpoints (per spec v0.2 Step 3)
@@ -488,12 +495,34 @@ app.post('/backup/trigger', async (c) => {
     return c.json({
       success: true,
       snapshotId: result.snapshotId,
-      uploadedCount: result.uploadedCount,
-      skippedCount: result.skippedCount,
+      uploadedPacks: result.uploadedPacks,
+      newBlobsCount: result.newBlobsCount,
+      skippedBlobsCount: result.skippedBlobsCount,
       manifest: result.manifest,
     });
   } catch (err: any) {
     return c.json({ error: err.message || 'Backup failed' }, 500);
+  }
+});
+
+app.post('/backup/prune', async (c) => {
+  try {
+    const apply = c.req.query('apply') === 'true';
+    const keepLast = Number(c.req.query('keep')) || 5;
+    const result = await pruneBackups(backupService.getTarget(), { keepLast, apply });
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Prune failed' }, 500);
+  }
+});
+
+app.get('/backup/check', async (c) => {
+  try {
+    const sampleRate = Number(c.req.query('sample')) || 1.0;
+    const result = await checkBackupRepository(backupService.getTarget(), { sampleRate });
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Check failed' }, 500);
   }
 });
 

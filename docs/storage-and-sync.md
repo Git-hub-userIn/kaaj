@@ -347,24 +347,76 @@ flowchart TD
 
 ---
 
-## 9. Future Option: Pack-per-Entry Archive Storage (Evaluated, Not Implemented)
+## 9. Restic-Inspired Pack Repository Architecture
 
-We evaluated an entry-level pack archive format for remote backups.
+To overcome Google Drive rate limits (~2-3 file creations per second), Kaaj uses an immutable, content-addressed pack repository layout modeled on Restic and Borg.
 
-### 9.1 Design Concept
-- Combine all chunk files for a single entry into one concatenated pack file.
-- Enforce a strict boundary cap: maximum 5 MB or 200 chunks per pack file.
-- When an entry exceeds 200 chunks or 5 MB, create sequential packs (`pack_001.bin`, `pack_002.bin`).
+### 9.1 Repository Structure
 
-### 9.2 Trade-Off Analysis
-- **Advantages:**
-  - Decreases sequential HTTPS round trips to Google Drive by 50x to 100x during initial full snapshots.
-  - Reduces total file object count in cloud storage directories.
-- **Disadvantages:**
-  - Increases write amplification. Modifying a single block requires re-uploading the entire entry pack file instead of one isolated 64 KB chunk.
-  - Complicates incremental diffing and partial restore operations.
-  - Requires extra archive packing, unpacking, and verification logic on client and server.
+All objects are write-once and immutable:
 
-### 9.3 Milestone Decision
-Do not implement pack files in the current release. Bounded concurrency (pool size 4) and persistent Drive file-id caching resolve initial snapshot latency without pack file complexity. Keep this design as an evaluation option for vaults exceeding 5,000 entries.
+```text
+Kaaj/ (or local backup directory)
+├── packs/
+│   ├── <packId_sha256>          # Pack binary: concatenated blobs + JSON footer + uint32BE length
+│   └── ...
+├── index/
+│   ├── <indexId_sha256>.json    # Map: blobHash -> { packId, offset, length, type }
+│   └── ...
+└── snapshots/
+    ├── <timestamp>-<hash>.json  # Snapshot manifest referencing blob hashes
+    └── latest.json              # Fast link to latest snapshot manifest
+```
+
+### 9.2 Pack File Format
+
+Packs concatenate multiple blobs up to a target size of 4 MB (large assets above 2 MB form dedicated packs):
+
+```text
++-----------------------------------------------------------+
+| Blob 1 (Chunk, Manifest, DB, or Original Image)           |
++-----------------------------------------------------------+
+| Blob 2                                                    |
++-----------------------------------------------------------+
+| ...                                                       |
++-----------------------------------------------------------+
+| Footer JSON: {"version":1,"blobs":[{"hash",offset,length}]}|
++-----------------------------------------------------------+
+| Footer Length (4 bytes, unsigned 32-bit big-endian)       |
++-----------------------------------------------------------+
+```
+
+### 9.3 Ingestion and Deduplication Rules
+
+1. **Remote is Source of Truth**: At backup start, list remote `index/` and `snapshots/`. Local cache is verified against the remote listing.
+2. **Thumbnails are Excluded**: Thumbnails (`storage/thumbs/*.webp`) are not backed up. Restore regenerates thumbnails using Sharp.
+3. **Write Order Guarantee**: Upload packs first -> upload index second -> upload snapshot LAST. If a process terminates mid-upload, prior snapshots remain completely valid.
+4. **Resumption**: A subsequent run checks the remote index. Blobs already uploaded are skipped automatically.
+
+### 9.4 Pack Compaction Design (Future Specification)
+
+Over time, modifying chunks creates unreferenced "dead" blobs in older packs.
+
+**Compaction Algorithm**:
+1. Scan all surviving snapshots from retention policy.
+2. Identify live blobs and compute the live-byte ratio per pack (`liveBytes / totalPackBytes`).
+3. If a pack has less than 30% live blobs (mostly dead):
+   - Download the pack.
+   - Extract surviving live blobs.
+   - Append live blobs into a new active pack.
+   - Upload the new consolidated pack and new index.
+   - Delete the old fragmented pack.
+4. Retention and compaction run only via explicit `backup:prune` tasks, never during regular editor saves.
+
+### 9.5 Encryption Design (Future Specification)
+
+Currently, packs and snapshots on Google Drive hold unencrypted plaintext data.
+
+**Future Per-Blob Encryption Roadmap**:
+1. Derive a 256-bit Master Key from a user passphrase using **Argon2id** (memory cost: 64 MB, time cost: 3).
+2. Store key parameters in `keys/<keyId>.json` encrypted with the derived key.
+3. Before appending any blob to a pack, encrypt the blob payload using **ChaCha20-Poly1305** or **AES-256-GCM** with a random 96-bit nonce.
+4. Store encrypted blob hashes as `HMAC-SHA256(masterKey, plaintextHash)` to prevent metadata leakage while preserving deduplication.
+5. Encrypt pack footers, index files, and snapshot manifests with the master key.
+
 

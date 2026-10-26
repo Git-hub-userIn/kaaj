@@ -542,29 +542,89 @@ export class GoogleDriveBackupTarget implements BackupTarget {
   async list(prefix = ''): Promise<BackupFileRecord[]> {
     const accessToken = await this.getAccessToken();
     const cleanPrefix = prefix.replace(/^[/\\]+/, '').replace(/\\/g, '/');
-    const folderId = await this.ensureFolder(cleanPrefix);
 
-    const q = `'${folderId}' in parents and trashed = false`;
-    const res = await fetchWithRetry(
-      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,size,md5Checksum,modifiedTime,mimeType)`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-
-    const data = await res.json();
-    const records: BackupFileRecord[] = [];
-
-    for (const f of data.files || []) {
-      if (f.mimeType !== 'application/vnd.google-apps.folder') {
-        const filePath = cleanPrefix ? `${cleanPrefix}/${f.name}` : f.name;
-        records.push({
-          path: filePath,
-          bytes: Number(f.size || 0),
-          checksum: f.md5Checksum || '',
-          updatedAt: f.modifiedTime || new Date().toISOString(),
-        });
-      }
+    // If prefix is empty, list packs, index, and snapshots
+    if (!cleanPrefix) {
+      const [packs, index, snapshots] = await Promise.all([
+        this.list('packs'),
+        this.list('index'),
+        this.list('snapshots'),
+      ]);
+      return [...packs, ...index, ...snapshots];
     }
 
+    const folderId = await this.ensureFolder(cleanPrefix);
+    const records: BackupFileRecord[] = [];
+    let pageToken: string | null = null;
+
+    do {
+      let url = `https://www.googleapis.com/drive/v3/files?pageSize=1000&fields=nextPageToken,files(id,name,size,md5Checksum,modifiedTime,mimeType)&q=${encodeURIComponent(
+        `'${folderId}' in parents and trashed = false`
+      )}`;
+      if (pageToken) {
+        url += `&pageToken=${encodeURIComponent(pageToken)}`;
+      }
+
+      const res = await fetchWithRetry(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const data = await res.json();
+      pageToken = data.nextPageToken || null;
+
+      for (const f of data.files || []) {
+        if (f.mimeType !== 'application/vnd.google-apps.folder') {
+          const filePath = `${cleanPrefix}/${f.name}`;
+          records.push({
+            path: filePath,
+            bytes: Number(f.size || 0),
+            checksum: f.md5Checksum || '',
+            updatedAt: f.modifiedTime || new Date().toISOString(),
+          });
+          // Cache the file ID for fast lookups
+          this.driveFileCache.set(filePath, {
+            fileId: f.id,
+            checksum: f.md5Checksum || '',
+            parentFolderId: folderId,
+          });
+        }
+      }
+    } while (pageToken);
+
     return records;
+  }
+
+  async delete(relativePath: string): Promise<void> {
+    try {
+      const accessToken = await this.getAccessToken();
+      const cleanRel = relativePath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+      let fileId: string | null = null;
+
+      const cached = this.driveFileCache.get(cleanRel);
+      if (cached && cached.fileId) {
+        fileId = cached.fileId;
+      } else {
+        const folderPath = path.dirname(cleanRel);
+        const fileName = path.basename(cleanRel);
+        const parentFolderId = await this.ensureFolder(folderPath === '.' ? '' : folderPath);
+        const q = `name = '${fileName}' and '${parentFolderId}' in parents and trashed = false`;
+        const searchRes = await fetchWithRetry(
+          `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        const searchData = await searchRes.json();
+        fileId = searchData.files?.[0]?.id || null;
+      }
+
+      if (fileId) {
+        await fetchWithRetry(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        this.driveFileCache.delete(cleanRel);
+        await this.saveCache();
+      }
+    } catch (err: any) {
+      console.warn(`[Drive Target] Failed to delete file ${relativePath}:`, err.message || err);
+    }
   }
 }

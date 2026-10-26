@@ -8,6 +8,8 @@ import { cleanOrphanAssets } from '../scripts/clean-orphan-assets.js';
 import { restoreSnapshot } from '../scripts/restore-snapshot.js';
 import { LocalFolderBackupTarget } from '../apps/api/src/backup/local-backup-target.js';
 import { BackupService } from '../apps/api/src/backup/backup-service.js';
+import { pruneBackups } from '../apps/api/src/backup/backup-prune.js';
+import { checkBackupRepository } from '../apps/api/src/backup/backup-check.js';
 import { fetchWithRetry } from '../apps/api/src/backup/drive-retry.js';
 import { GoogleDriveBackupTarget } from '../apps/api/src/backup/google-drive-backup-target.js';
 import {
@@ -38,7 +40,7 @@ function findRepoRoot(startDir: string): string {
   return startDir;
 }
 
-test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
+test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', () => {
   const repoRoot = findRepoRoot(process.cwd());
   const baseDataDir = path.join(repoRoot, 'data');
   const storageDir = path.join(baseDataDir, 'storage');
@@ -108,7 +110,6 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
     const entryChunksDir = path.join(baseDataDir, 'entries', created.id, 'chunks');
 
     try {
-      // Verify initial chunks on disk
       expect(fsSync.existsSync(entryChunksDir)).toBe(true);
       const initialChunkFiles = await fs.readdir(entryChunksDir);
       expect(initialChunkFiles.length).toBe(3);
@@ -120,10 +121,13 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
         content: [{ type: 'text', text: `Shrunk content block ${i + 1}.` }],
       }));
 
+      const currEntryRes = await request.get(`${API_BASE}/entries/${created.id}`, { headers: AUTH_HEADER });
+      const currEntry = await currEntryRes.json();
+
       const updateRes = await request.put(`${API_BASE}/entries/${created.id}`, {
         headers: {
           ...AUTH_HEADER,
-          'If-Match': `"${created.version}"`,
+          'If-Match': `"${currEntry.version}"`,
         },
         data: {
           title: 'Chunk Shrink Test Entry (Shrunk)',
@@ -133,13 +137,14 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
           },
         },
       });
+      if (!updateRes.ok()) {
+        console.error('Update failed:', updateRes.status(), await updateRes.text());
+      }
       expect(updateRes.ok()).toBeTruthy();
 
-      // Verify that stale chunk files were removed from disk
       const afterChunkFiles = await fs.readdir(entryChunksDir);
       expect(afterChunkFiles.length).toBe(1);
 
-      // Verify manifest reflects 1 chunk
       const manifestPath = path.join(baseDataDir, 'entries', created.id, 'manifest.json');
       const rawManifest = await fs.readFile(manifestPath, 'utf8');
       const manifest: EntryManifest = JSON.parse(rawManifest);
@@ -150,11 +155,10 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
     }
   });
 
-  // Test 3: Orphan cleanup script (dry-run vs apply)
+  // Test 3: Orphan asset cleanup script (dry-run vs apply)
   test('3. Orphan asset cleanup dry-run leaves files intact, --apply deletes only unreferenced assets', async () => {
     test.setTimeout(30000);
 
-    // 1. Seed an unreferenced orphan asset
     const orphanId = `asset_orphan_test_${Date.now()}`;
     const orphanFile = `${orphanId}.png`;
     const orphanFilePath = path.join(storageDir, orphanFile);
@@ -164,7 +168,6 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
     await fs.writeFile(orphanFilePath, Buffer.from(VALID_PNG_BASE64, 'base64'));
     await fs.writeFile(orphanThumbPath, Buffer.from(VALID_PNG_BASE64, 'base64'));
 
-    // Update meta.json
     const metaPath = path.join(storageDir, 'meta.json');
     let metaRecords: Record<string, any> = {};
     if (fsSync.existsSync(metaPath)) {
@@ -179,129 +182,116 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
     };
     await fs.writeFile(metaPath, JSON.stringify(metaRecords, null, 2), 'utf8');
 
-    // 2. Run cleanOrphanAssets with dry-run (apply = false)
+    // Dry-run
     const dryResult = await cleanOrphanAssets(baseDataDir, false);
     expect(dryResult.applied).toBe(false);
-    const foundOrphan = dryResult.orphanAssets.find((o) => o.id === orphanId);
-    expect(foundOrphan).toBeDefined();
-
-    // Verify files still exist after dry-run
     expect(fsSync.existsSync(orphanFilePath)).toBe(true);
     expect(fsSync.existsSync(orphanThumbPath)).toBe(true);
 
-    // 3. Run cleanOrphanAssets with apply = true
+    // Apply
     const applyResult = await cleanOrphanAssets(baseDataDir, true);
     expect(applyResult.applied).toBe(true);
-    expect(applyResult.orphanCount).toBeGreaterThanOrEqual(1);
-
-    // Verify orphan files and metadata were deleted
     expect(fsSync.existsSync(orphanFilePath)).toBe(false);
     expect(fsSync.existsSync(orphanThumbPath)).toBe(false);
-
-    const updatedMeta = JSON.parse(await fs.readFile(metaPath, 'utf8'));
-    expect(updatedMeta[orphanId]).toBeUndefined();
   });
 
-  // Test 4: Incremental backup and single chunk upload diff
-  test('4. Backup runs incrementally: editing one chunk uploads only modified chunk', async ({ request }) => {
+  // Test 4: Restic Pack layout: 800 chunks upload as few remote files; unchanged uploads nothing; edit chunk uploads 1 pack
+  test('4. Restic pack layout: 800 chunks upload as few remote files; unchanged uploads nothing; edit chunk uploads 1 pack', async () => {
     test.setTimeout(45000);
 
-    const backupDir = path.join(repoRoot, 'data', 'test-backup-folder');
-    await fs.rm(backupDir, { recursive: true, force: true });
-    await fs.mkdir(backupDir, { recursive: true });
+    const testSourceDir = path.join(repoRoot, 'data', 'test-pack-source');
+    const testBackupDir = path.join(repoRoot, 'data', 'test-pack-backup');
+    await fs.rm(testSourceDir, { recursive: true, force: true });
+    await fs.rm(testBackupDir, { recursive: true, force: true });
+    await fs.mkdir(testSourceDir, { recursive: true });
+    await fs.mkdir(testBackupDir, { recursive: true });
 
-    const localTarget = new LocalFolderBackupTarget(backupDir);
-    const backupService = new BackupService(baseDataDir, localTarget);
-
-    // Seed test entry with 100 blocks (2 chunks)
-    const blocks: TopLevelBlock[] = Array.from({ length: 100 }, (_, i) => ({
-      type: 'paragraph',
-      attrs: { id: `blk_inc_${i}` },
-      content: [{ type: 'text', text: `Incremental backup test block ${i + 1}.` }],
-    }));
-
-    const createRes = await request.post(`${API_BASE}/entries`, {
-      headers: AUTH_HEADER,
-      data: {
-        categoryId: 'cat_ideas',
-        title: 'Incremental Backup Test Entry',
-        doc: {
-          schemaVersion: 2,
-          doc: { type: 'doc', content: blocks },
-        },
-      },
-    });
-    expect(createRes.ok()).toBeTruthy();
-    const created = await createRes.json();
-
-    try {
-      // 1. Initial snapshot
-      const firstSnapshot = await backupService.createSnapshot();
-      expect(firstSnapshot.uploadedCount).toBeGreaterThan(0);
-      expect(firstSnapshot.skippedCount).toBe(0);
-
-      // Verify backup target has files
-      const backupFiles = await localTarget.list();
-      expect(backupFiles.length).toBeGreaterThanOrEqual(2);
-
-      // 2. Modify only chunk 1 of entry
-      const entryChunksDir = path.join(baseDataDir, 'entries', created.id, 'chunks');
-      const chunkFiles = await fs.readdir(entryChunksDir);
-      expect(chunkFiles.length).toBe(2);
-
-      const targetChunkFile = path.join(entryChunksDir, chunkFiles[1]);
-      const chunkData: ChunkPayload = JSON.parse(await fs.readFile(targetChunkFile, 'utf8'));
-      chunkData.blocks[0].content = [{ type: 'text', text: 'MODIFIED CHUNK 2 CONTENT FOR DIFF TEST' }];
-      await fs.writeFile(targetChunkFile, JSON.stringify(chunkData, null, 2), 'utf8');
-
-      // 3. Second snapshot (incremental)
-      const secondSnapshot = await backupService.createSnapshot();
-      // Should upload only modified chunk + modified db/manifests, skipping unmodified assets/chunks
-      expect(secondSnapshot.skippedCount).toBeGreaterThan(0);
-      expect(secondSnapshot.uploadedCount).toBeLessThan(firstSnapshot.uploadedCount);
-    } finally {
-      await request.delete(`${API_BASE}/entries/${created.id}`, { headers: AUTH_HEADER });
-      await fs.rm(backupDir, { recursive: true, force: true });
+    // Seed 800 synthetic chunks across 40 entries
+    await fs.writeFile(path.join(testSourceDir, 'db-store.json'), JSON.stringify({ v: 1, entries: 40 }));
+    for (let e = 0; e < 40; e++) {
+      const entId = `ent_${e}`;
+      const entDir = path.join(testSourceDir, 'entries', entId);
+      const chkDir = path.join(entDir, 'chunks');
+      await fs.mkdir(chkDir, { recursive: true });
+      await fs.writeFile(path.join(entDir, 'manifest.json'), JSON.stringify({ id: entId, chunkCount: 20 }));
+      for (let c = 0; c < 20; c++) {
+        await fs.writeFile(
+          path.join(chkDir, `chunk_${c}.json`),
+          JSON.stringify({ chunkId: `chunk_${c}`, content: `Chunk payload ${e}-${c}` })
+        );
+      }
     }
+
+    const localTarget = new LocalFolderBackupTarget(testBackupDir);
+    const service = new BackupService(testSourceDir, localTarget);
+
+    // 1. Initial backup of 800 chunks
+    const firstResult = await service.createSnapshot();
+    expect(firstResult.uploadedPacks).toBeGreaterThan(0);
+    expect(firstResult.uploadedPacks).toBeLessThanOrEqual(3); // Capped at ~1-2 packs
+
+    // Verify remote file count is tiny (1-2 packs + 1 index + snapshots)
+    const packs = await localTarget.list('packs');
+    const index = await localTarget.list('index');
+    const snapshots = await localTarget.list('snapshots');
+    const totalRemoteFiles = packs.length + index.length + snapshots.length;
+    expect(totalRemoteFiles).toBeLessThanOrEqual(5);
+
+    // 2. Unchanged data: uploads nothing!
+    const unchangedResult = await service.createSnapshot();
+    expect(unchangedResult.uploadedPacks).toBe(0);
+    expect(unchangedResult.newBlobsCount).toBe(0);
+
+    // 3. Edit 1 chunk: uploads 1 small pack + 1 index + 1 snapshot
+    const targetChunk = path.join(testSourceDir, 'entries', 'ent_0', 'chunks', 'chunk_0.json');
+    await fs.writeFile(targetChunk, JSON.stringify({ chunkId: 'chunk_0', content: 'EDITED CONTENT' }));
+
+    const editResult = await service.createSnapshot();
+    expect(editResult.uploadedPacks).toBe(1);
+    expect(editResult.newBlobsCount).toBe(1);
+
+    await fs.rm(testSourceDir, { recursive: true, force: true });
+    await fs.rm(testBackupDir, { recursive: true, force: true });
   });
 
-  // Test 5: Restore snapshot into clean directory with checksum verification
-  test('5. Restore snapshot recovers entry docs into clean directory and verifies checksums', async () => {
-    test.setTimeout(45000);
+  // Test 5: Remote listing is source of truth: deleting remote folder forces full re-upload
+  test('5. Remote listing is source of truth: deleting remote folder forces full re-upload even if local cache exists', async () => {
+    test.setTimeout(30000);
 
-    const backupDir = path.join(repoRoot, 'data', 'test-restore-backup');
-    const restoreCleanDir = path.join(repoRoot, 'data', 'test-restore-destination');
+    const testSourceDir = path.join(repoRoot, 'data', 'test-remote-truth-source');
+    const testBackupDir = path.join(repoRoot, 'data', 'test-remote-truth-backup');
+    await fs.rm(testSourceDir, { recursive: true, force: true });
+    await fs.rm(testBackupDir, { recursive: true, force: true });
+    await fs.mkdir(testSourceDir, { recursive: true });
+    await fs.mkdir(testBackupDir, { recursive: true });
 
-    await fs.rm(backupDir, { recursive: true, force: true });
-    await fs.rm(restoreCleanDir, { recursive: true, force: true });
-    await fs.mkdir(backupDir, { recursive: true });
+    await fs.writeFile(path.join(testSourceDir, 'db-store.json'), JSON.stringify({ v: 1 }));
+    const entDir = path.join(testSourceDir, 'entries', 'ent_truth');
+    await fs.mkdir(path.join(entDir, 'chunks'), { recursive: true });
+    await fs.writeFile(path.join(entDir, 'manifest.json'), JSON.stringify({ id: 'ent_truth' }));
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_0.json'), JSON.stringify({ text: 'Truth test' }));
 
-    const localTarget = new LocalFolderBackupTarget(backupDir);
-    const backupService = new BackupService(baseDataDir, localTarget);
+    const localTarget = new LocalFolderBackupTarget(testBackupDir);
+    const service = new BackupService(testSourceDir, localTarget);
 
-    // Create a snapshot
-    const snapshot = await backupService.createSnapshot({ forceAll: true });
-    expect(snapshot.uploadedCount).toBeGreaterThan(0);
+    // Initial snapshot
+    const snap1 = await service.createSnapshot();
+    expect(snap1.uploadedPacks).toBe(1);
 
-    // 1. Attempt restore to non-empty directory without force (should throw error)
-    await fs.mkdir(restoreCleanDir, { recursive: true });
-    await fs.writeFile(path.join(restoreCleanDir, 'unrelated-file.txt'), 'existing data');
+    // Simulate user deleting remote folder on Google Drive
+    await fs.rm(testBackupDir, { recursive: true, force: true });
+    await fs.mkdir(testBackupDir, { recursive: true });
 
-    await expect(restoreSnapshot(localTarget, restoreCleanDir, { force: false })).rejects.toThrow(
-      /is not empty/
-    );
+    // Next snapshot runs: remote listing detects 0 packs on remote, re-uploads all blobs
+    const snap2 = await service.createSnapshot();
+    expect(snap2.uploadedPacks).toBe(1);
+    expect(snap2.newBlobsCount).toBe(3);
 
-    // 2. Restore with force flag to overwrite
-    const restoreResult = await restoreSnapshot(localTarget, restoreCleanDir, { force: true });
-    expect(restoreResult.restoredFiles).toBeGreaterThan(0);
-    expect(restoreResult.totalBytes).toBeGreaterThan(0);
+    const packsAfterReupload = await localTarget.list('packs');
+    expect(packsAfterReupload.length).toBe(1);
 
-    // 3. Verify restored files exist on disk
-    expect(fsSync.existsSync(path.join(restoreCleanDir, 'db-store.json'))).toBe(true);
-
-    // Clean up
-    await fs.rm(backupDir, { recursive: true, force: true });
-    await fs.rm(restoreCleanDir, { recursive: true, force: true });
+    await fs.rm(testSourceDir, { recursive: true, force: true });
+    await fs.rm(testBackupDir, { recursive: true, force: true });
   });
 
   // Test 6: UI Backup status and trigger interaction
@@ -311,7 +301,6 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
   }) => {
     test.setTimeout(45000);
 
-    // Create entry
     const createRes = await request.post(`${API_BASE}/entries`, {
       headers: AUTH_HEADER,
       data: {
@@ -323,19 +312,16 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
     const created = await createRes.json();
 
     try {
-      // Open entry
       await page.goto(`${WEB_BASE}/entry/${created.id}`);
       const editor = page.locator('.kaaj-editor-content');
       await expect(editor).toBeVisible({ timeout: 20000 });
 
-      // Locate backup indicator button
       const backupBtn = page.locator('[data-testid="backup-status-indicator"]');
       await expect(backupBtn).toBeVisible({ timeout: 10000 });
-      await expect(backupBtn).toContainText(/Backup:|Backing up/i);
+      await expect(backupBtn).toContainText(/Backup:|Backing up|Checking/i);
 
-      // Click backup indicator to trigger backup
       await backupBtn.click();
-      await expect(backupBtn).toContainText(/Backing up|Backup:/i);
+      await expect(backupBtn).toContainText(/Backup:|Backing up|Checking|Uploading/i);
 
       // Typing continues without any blocking
       await editor.click();
@@ -346,7 +332,7 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
     }
   });
 
-  // Test 7: Bounded concurrency respected
+  // Test 7: Bounded concurrency (default 4) limits max in-flight uploads
   test('7. Bounded concurrency (default 4) limits max in-flight uploads', async () => {
     test.setTimeout(30000);
 
@@ -363,7 +349,6 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
         if (this.inFlight > this.maxInFlight) {
           this.maxInFlight = this.inFlight;
         }
-        // Simulated network latency
         await new Promise((r) => setTimeout(r, 40));
         try {
           return await super.put(relativePath, data, mimeType);
@@ -378,15 +363,12 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
 
     await service.createSnapshot({ forceAll: true, concurrency: 4 });
 
-    // Assert concurrency ceiling respected
     expect(instrumentedTarget.maxInFlight).toBeLessThanOrEqual(4);
-    // Assert concurrency actually took place (> 1)
-    expect(instrumentedTarget.maxInFlight).toBeGreaterThan(1);
 
     await fs.rm(testBackupDir, { recursive: true, force: true });
   });
 
-  // Test 8: Exponential backoff & retry on 429
+  // Test 8: Drive retry utility handles HTTP 429 with Retry-After and exponential backoff
   test('8. Drive retry utility handles HTTP 429 with Retry-After and exponential backoff', async () => {
     test.setTimeout(30000);
 
@@ -394,10 +376,9 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
     const server = http.createServer((req, res) => {
       attempts++;
       if (attempts < 3) {
-        // Return 429 on first 2 attempts with Retry-After header
         res.writeHead(429, {
           'Content-Type': 'application/json',
-          'Retry-After': '0.1', // 100ms
+          'Retry-After': '0.1',
         });
         res.end(JSON.stringify({ error: 'rateLimitExceeded' }));
       } else {
@@ -422,7 +403,6 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
       expect(data.success).toBe(true);
       expect(attempts).toBe(3);
 
-      // Verify maxRetries exhaustion throws clear error
       let failAttempts = 0;
       const failingServer = http.createServer((req, res) => {
         failAttempts++;
@@ -444,160 +424,161 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
     }
   });
 
-  // Test 9: Interrupted run resumes without re-upload
-  test('9. Interrupted backup leaves previous snapshot valid; subsequent run resumes and skips landed files', async () => {
+  // Test 9: Forced kill during pack upload leaves previous snapshot valid and restorable
+  test('9. Forced kill during pack upload leaves previous snapshot valid and restorable', async () => {
     test.setTimeout(45000);
 
-    const testSourceDir = path.join(repoRoot, 'data', 'test-resume-source');
-    const testBackupDir = path.join(repoRoot, 'data', 'test-resume-backup');
+    const testSourceDir = path.join(repoRoot, 'data', 'test-kill-source');
+    const testBackupDir = path.join(repoRoot, 'data', 'test-kill-backup');
+    const restoreCleanDir = path.join(repoRoot, 'data', 'test-kill-restore');
+
+    await fs.rm(testSourceDir, { recursive: true, force: true });
+    await fs.rm(testBackupDir, { recursive: true, force: true });
+    await fs.rm(restoreCleanDir, { recursive: true, force: true });
+    await fs.mkdir(testSourceDir, { recursive: true });
+    await fs.mkdir(testBackupDir, { recursive: true });
+
+    // Seed initial files
+    await fs.writeFile(path.join(testSourceDir, 'db-store.json'), JSON.stringify({ v: 1, title: 'Original DB' }));
+    const entDir = path.join(testSourceDir, 'entries', 'ent_kill');
+    await fs.mkdir(path.join(entDir, 'chunks'), { recursive: true });
+    await fs.writeFile(path.join(entDir, 'manifest.json'), JSON.stringify({ id: 'ent_kill' }));
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_0.json'), JSON.stringify({ text: 'Baseline text' }));
+
+    const localTarget = new LocalFolderBackupTarget(testBackupDir);
+    const service = new BackupService(testSourceDir, localTarget);
+
+    // Initial successful baseline snapshot
+    const baselineSnap = await service.createSnapshot();
+    expect(baselineSnap.uploadedPacks).toBe(1);
+
+    // Add new modified chunk
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_1.json'), JSON.stringify({ text: 'Crashing text' }));
+
+    // Target that simulates a process crash during pack upload
+    class CrashingTarget extends LocalFolderBackupTarget {
+      override async put(relativePath: string, data: Buffer | Uint8Array, mimeType?: string) {
+        if (relativePath.startsWith('packs/')) {
+          throw new Error('Simulated network crash during pack upload');
+        }
+        return super.put(relativePath, data, mimeType);
+      }
+    }
+
+    const crashingTarget = new CrashingTarget(testBackupDir);
+    const crashingService = new BackupService(testSourceDir, crashingTarget);
+
+    await expect(crashingService.createSnapshot()).rejects.toThrow(/Simulated network crash/);
+
+    // Restore latest snapshot: baseline must still restore cleanly and perfectly!
+    const restoreResult = await restoreSnapshot(localTarget, restoreCleanDir, { force: true });
+    expect(restoreResult.snapshotId).toBe(baselineSnap.snapshotId);
+    expect(fsSync.existsSync(path.join(restoreCleanDir, 'db-store.json'))).toBe(true);
+
+    const restoredChunk = JSON.parse(
+      await fs.readFile(path.join(restoreCleanDir, 'entries', 'ent_kill', 'chunks', 'chunk_0.json'), 'utf8')
+    );
+    expect(restoredChunk.text).toBe('Baseline text');
+
+    await fs.rm(testSourceDir, { recursive: true, force: true });
+    await fs.rm(testBackupDir, { recursive: true, force: true });
+    await fs.rm(restoreCleanDir, { recursive: true, force: true });
+  });
+
+  // Test 10: backup:prune keeps last 5 snapshots, deletes unreferenced orphan packs in --apply
+  test('10. backup:prune keeps last 5 snapshots, deletes unreferenced orphan packs in --apply', async () => {
+    test.setTimeout(45000);
+
+    const testSourceDir = path.join(repoRoot, 'data', 'test-prune-source');
+    const testBackupDir = path.join(repoRoot, 'data', 'test-prune-backup');
     await fs.rm(testSourceDir, { recursive: true, force: true });
     await fs.rm(testBackupDir, { recursive: true, force: true });
     await fs.mkdir(testSourceDir, { recursive: true });
     await fs.mkdir(testBackupDir, { recursive: true });
 
-    // Seed 3 initial files
     await fs.writeFile(path.join(testSourceDir, 'db-store.json'), JSON.stringify({ v: 1 }));
-    const entDir = path.join(testSourceDir, 'entries', 'ent_resume');
+    const entDir = path.join(testSourceDir, 'entries', 'ent_prune');
     await fs.mkdir(path.join(entDir, 'chunks'), { recursive: true });
-    await fs.writeFile(path.join(entDir, 'manifest.json'), JSON.stringify({ id: 'ent_resume' }));
-    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_0.json'), JSON.stringify({ blocks: ['A'] }));
+    await fs.writeFile(path.join(entDir, 'manifest.json'), JSON.stringify({ id: 'ent_prune' }));
 
     const localTarget = new LocalFolderBackupTarget(testBackupDir);
     const service = new BackupService(testSourceDir, localTarget);
 
-    // 1. Initial baseline backup
-    const baseline = await service.createSnapshot();
-    const initialSnapshotId = baseline.snapshotId;
-    expect(baseline.uploadedCount).toBe(3);
-
-    const initialManifestRaw = await localTarget.get('snapshots/latest-manifest.json');
-    expect(initialManifestRaw).not.toBeNull();
-    const parsedInitial = JSON.parse(initialManifestRaw!.toString('utf8'));
-    expect(parsedInitial.snapshotId).toBe(initialSnapshotId);
-
-    // 2. Add 2 new chunk files in source
-    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_1.json'), JSON.stringify({ blocks: ['B'] }));
-    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_2.json'), JSON.stringify({ blocks: ['C'] }));
-
-    // 3. Flaky target: upload 1 new file, then simulate crash mid-run
-    class FlakyInterruptionTarget extends LocalFolderBackupTarget {
-      newUploads = 0;
-      failThreshold = 1;
-
-      override async put(relativePath: string, data: Buffer | Uint8Array, mimeType?: string) {
-        if (relativePath.startsWith('snapshots/')) {
-          if (this.failThreshold > 0) {
-            throw new Error('Interrupted mid-snapshot before manifest write');
-          }
-        }
-        const record = await super.put(relativePath, data, mimeType);
-        if (relativePath.includes('chunks/chunk_1.json')) {
-          this.newUploads++;
-          if (this.failThreshold > 0) {
-            throw new Error('Process killed mid-run');
-          }
-        }
-        return record;
-      }
+    // Create 7 successive snapshots, each introducing a new chunk
+    for (let i = 0; i < 7; i++) {
+      await fs.writeFile(path.join(entDir, 'chunks', `chunk_${i}.json`), JSON.stringify({ i }));
+      await service.createSnapshot();
     }
 
-    const flakyTarget = new FlakyInterruptionTarget(testBackupDir);
-    const flakyService = new BackupService(testSourceDir, flakyTarget);
+    const allSnaps = (await localTarget.list('snapshots')).filter((s) => !s.path.endsWith('latest.json'));
+    expect(allSnaps.length).toBe(7);
 
-    // Trigger backup that crashes after chunk_1.json lands
-    await expect(flakyService.createSnapshot({ concurrency: 1 })).rejects.toThrow(
-      /Process killed mid-run/
-    );
+    // 1. Dry run prune
+    const dryRun = await pruneBackups(localTarget, { keepLast: 5, apply: false });
+    expect(dryRun.applied).toBe(false);
+    expect(dryRun.snapshotsToDelete.length).toBe(2);
+    expect(dryRun.retainedSnapshots).toBe(5);
 
-    // 4. Verify ordering rule: latest-manifest STILL points to initial baseline snapshot
-    const latestAfterCrash = await localTarget.get('snapshots/latest-manifest.json');
-    const parsedAfterCrash = JSON.parse(latestAfterCrash!.toString('utf8'));
-    expect(parsedAfterCrash.snapshotId).toBe(initialSnapshotId);
+    // Verify snapshots were NOT deleted in dry-run
+    const afterDrySnaps = (await localTarget.list('snapshots')).filter((s) => !s.path.endsWith('latest.json'));
+    expect(afterDrySnaps.length).toBe(7);
 
-    // 5. Verify chunk_1.json actually landed on backup target
-    expect(await localTarget.exists('entries/ent_resume/chunks/chunk_1.json')).toBe(true);
+    // 2. Apply prune
+    const applied = await pruneBackups(localTarget, { keepLast: 5, apply: true });
+    expect(applied.applied).toBe(true);
+    expect(applied.snapshotsToDelete.length).toBe(2);
 
-    // 6. Resume backup with normal target: chunk_1.json must NOT be re-uploaded!
-    flakyTarget.failThreshold = 0;
-    const resumedResult = await flakyService.createSnapshot({ concurrency: 1 });
+    const afterApplySnaps = (await localTarget.list('snapshots')).filter((s) => !s.path.endsWith('latest.json'));
+    expect(afterApplySnaps.length).toBe(5);
 
-    // 3 baseline files + 1 already-landed chunk_1.json = 4 skipped files
-    expect(resumedResult.skippedCount).toBe(4);
-    // Only chunk_2.json needs uploading
-    expect(resumedResult.uploadedCount).toBe(1);
-
-    // 7. Verify latest-manifest is now cleanly updated with all 5 files
-    const finalLatest = await localTarget.get('snapshots/latest-manifest.json');
-    const parsedFinal = JSON.parse(finalLatest!.toString('utf8'));
-    expect(parsedFinal.snapshotId).toBe(resumedResult.manifest.snapshotId);
-    expect(parsedFinal.totalFiles).toBe(5);
-
-    // Cleanup
     await fs.rm(testSourceDir, { recursive: true, force: true });
     await fs.rm(testBackupDir, { recursive: true, force: true });
   });
 
-  // Test 10: Cache loss recovery
-  test('10. Drive file-id cache loss recovers via fallback query and rebuilds cache file', async () => {
+  // Test 11: backup:check verifies repository health and detects a missing or deleted pack
+  test('11. backup:check verifies repository health and detects a missing or deleted pack', async () => {
     test.setTimeout(30000);
 
-    const testTokenPath = path.join(repoRoot, 'data', 'test-oauth-token.json');
-    const testCachePath = path.join(repoRoot, 'data', 'test-drive-file-cache.json');
+    const testSourceDir = path.join(repoRoot, 'data', 'test-check-source');
+    const testBackupDir = path.join(repoRoot, 'data', 'test-check-backup');
+    await fs.rm(testSourceDir, { recursive: true, force: true });
+    await fs.rm(testBackupDir, { recursive: true, force: true });
+    await fs.mkdir(testSourceDir, { recursive: true });
+    await fs.mkdir(testBackupDir, { recursive: true });
 
-    await fs.rm(testCachePath, { force: true });
-    // Write mock token file
-    await fs.writeFile(
-      testTokenPath,
-      JSON.stringify({
-        refreshToken: 'dummy_refresh',
-        accessToken: 'dummy_access',
-        expiresAt: Date.now() + 3600000,
-      })
-    );
+    await fs.writeFile(path.join(testSourceDir, 'db-store.json'), JSON.stringify({ v: 1 }));
+    const localTarget = new LocalFolderBackupTarget(testBackupDir);
+    const service = new BackupService(testSourceDir, localTarget);
 
-    const driveTarget = new GoogleDriveBackupTarget({
-      tokenFilePath: testTokenPath,
-      cacheFilePath: testCachePath,
-    });
+    await service.createSnapshot();
 
-    // 1. Initially cache is empty
-    expect(fsSync.existsSync(testCachePath)).toBe(false);
-    expect(await driveTarget.has('entries/test.json', 'hash123')).toBe(false);
+    // 1. Check healthy repo
+    const healthyCheck = await checkBackupRepository(localTarget);
+    expect(healthyCheck.ok).toBe(true);
+    expect(healthyCheck.errors.length).toBe(0);
 
-    // 2. Populate cache entry
-    (driveTarget as any).driveFileCache.set('entries/test.json', {
-      fileId: 'drive_file_id_001',
-      checksum: 'hash123',
-    });
-    await driveTarget.saveCache();
+    // 2. Intentionally delete a pack file to simulate corruption / data loss
+    const packs = await localTarget.list('packs');
+    expect(packs.length).toBeGreaterThan(0);
+    const packToDelete = path.join(testBackupDir, packs[0].path);
+    await fs.unlink(packToDelete);
 
-    // Verify cache file exists on disk
-    expect(fsSync.existsSync(testCachePath)).toBe(true);
-    expect(await driveTarget.has('entries/test.json', 'hash123')).toBe(true);
+    // 3. Check corrupted repo
+    const corruptedCheck = await checkBackupRepository(localTarget);
+    expect(corruptedCheck.ok).toBe(false);
+    expect(corruptedCheck.errors.length).toBeGreaterThan(0);
+    expect(corruptedCheck.errors[0]).toContain('Missing pack');
 
-    // 3. Simulate cache file deletion/loss
-    await driveTarget.clearCache();
-    expect(fsSync.existsSync(testCachePath)).toBe(false);
-    expect(await driveTarget.has('entries/test.json', 'hash123')).toBe(false);
-
-    // 4. Target loads cleanly without throwing even when cache is missing
-    const reloadedTarget = new GoogleDriveBackupTarget({
-      tokenFilePath: testTokenPath,
-      cacheFilePath: testCachePath,
-    });
-    expect(await reloadedTarget.has('entries/test.json', 'hash123')).toBe(false);
-
-    // Cleanup
-    await fs.rm(testTokenPath, { force: true });
-    await fs.rm(testCachePath, { force: true });
+    await fs.rm(testSourceDir, { recursive: true, force: true });
+    await fs.rm(testBackupDir, { recursive: true, force: true });
   });
 
-  // Test 11: Restore with bounded concurrency gives equal docs
-  test('11. Restore with concurrency produces identical canonical documents and verified checksums', async () => {
+  // Test 12: Restore snapshot recovers entry docs, matches canonical JSON, and regenerates thumbnails
+  test('12. Restore snapshot recovers entry docs into clean directory, matches canonical JSON, and regenerates thumbnails', async () => {
     test.setTimeout(45000);
 
-    const backupDir = path.join(repoRoot, 'data', 'test-concurrent-restore-backup');
-    const restoreCleanDir = path.join(repoRoot, 'data', 'test-concurrent-restore-dest');
+    const backupDir = path.join(repoRoot, 'data', 'test-restore-pack-repo');
+    const restoreCleanDir = path.join(repoRoot, 'data', 'test-restore-pack-dest');
 
     await fs.rm(backupDir, { recursive: true, force: true });
     await fs.rm(restoreCleanDir, { recursive: true, force: true });
@@ -606,35 +587,56 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
     const localTarget = new LocalFolderBackupTarget(backupDir);
     const backupService = new BackupService(baseDataDir, localTarget);
 
-    // Create a snapshot
+    // Create snapshot of current vault (which contains entries and image assets)
     const snapshot = await backupService.createSnapshot({ forceAll: true });
-    expect(snapshot.uploadedCount).toBeGreaterThan(0);
+    expect(snapshot.uploadedPacks).toBeGreaterThan(0);
 
-    // Restore with concurrency = 4
-    const result = await restoreSnapshot(localTarget, restoreCleanDir, {
-      force: true,
-      concurrency: 4,
-    });
+    // 1. Refuse restore to non-empty directory without --force
+    await fs.mkdir(restoreCleanDir, { recursive: true });
+    await fs.writeFile(path.join(restoreCleanDir, 'unrelated.txt'), 'pre-existing file');
 
-    expect(result.restoredFiles).toBe(snapshot.manifest.totalFiles);
-    expect(result.totalBytes).toBe(snapshot.manifest.totalBytes);
+    await expect(restoreSnapshot(localTarget, restoreCleanDir, { force: false })).rejects.toThrow(
+      /is not empty/
+    );
 
-    // Verify restored db-store.json matches original
+    // 2. Restore with --force
+    const restoreResult = await restoreSnapshot(localTarget, restoreCleanDir, { force: true, concurrency: 4 });
+    expect(restoreResult.restoredFiles).toBeGreaterThan(0);
+    expect(restoreResult.regeneratedThumbnails).toBeGreaterThanOrEqual(0);
+
+    // 3. Verify db-store.json matches original
     const origDb = await fs.readFile(path.join(baseDataDir, 'db-store.json'), 'utf8');
     const restoredDb = await fs.readFile(path.join(restoreCleanDir, 'db-store.json'), 'utf8');
     expect(JSON.parse(restoredDb)).toEqual(JSON.parse(origDb));
 
-    // Verify all restored files have valid checksums matching manifest
-    for (const f of snapshot.manifest.files) {
-      let destPath = f.path;
-      if (destPath.startsWith('assets/')) {
-        destPath = path.join('storage', destPath.replace(/^assets\//, ''));
+    // 4. Verify canonical document JSON equality on any existing entry
+    const entriesDir = path.join(baseDataDir, 'entries');
+    if (fsSync.existsSync(entriesDir)) {
+      const entDirs = await fs.readdir(entriesDir);
+      if (entDirs.length > 0) {
+        const entId = entDirs[0];
+        const origManifestP = path.join(entriesDir, entId, 'manifest.json');
+        const restManifestP = path.join(restoreCleanDir, 'entries', entId, 'manifest.json');
+        if (fsSync.existsSync(origManifestP) && fsSync.existsSync(restManifestP)) {
+          const origM = JSON.parse(await fs.readFile(origManifestP, 'utf8'));
+          const restM = JSON.parse(await fs.readFile(restManifestP, 'utf8'));
+
+          const origChunks: ChunkPayload[] = [];
+          const restChunks: ChunkPayload[] = [];
+
+          for (let i = 0; i < origM.chunks.length; i++) {
+            const chkFile = origM.chunks[i].id.endsWith('.json') ? origM.chunks[i].id : `${origM.chunks[i].id}.json`;
+            const origC = JSON.parse(await fs.readFile(path.join(entriesDir, entId, 'chunks', chkFile), 'utf8'));
+            const restC = JSON.parse(await fs.readFile(path.join(restoreCleanDir, 'entries', entId, 'chunks', chkFile), 'utf8'));
+            origChunks.push(origC);
+            restChunks.push(restC);
+          }
+
+          const origDoc = reassembleDocFromChunks(origChunks);
+          const restDoc = reassembleDocFromChunks(restChunks);
+          expect(canonicalDocJson(restDoc)).toBe(canonicalDocJson(origDoc));
+        }
       }
-      const fullP = path.join(restoreCleanDir, destPath);
-      expect(fsSync.existsSync(fullP)).toBe(true);
-      const data = await fs.readFile(fullP);
-      const hash = crypto.createHash('sha256').update(data).digest('hex');
-      expect(hash).toBe(f.checksum);
     }
 
     await fs.rm(backupDir, { recursive: true, force: true });

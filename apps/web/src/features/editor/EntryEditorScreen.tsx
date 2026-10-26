@@ -105,10 +105,14 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         const data = await res.json();
         setBackupStatus(data.status);
         if (data.status === 'running') {
-          const current = data.processedCount ?? data.uploadedCount ?? 0;
-          const total = data.totalFiles;
-          if (total) {
-            setBackupStatusText(`Backing up ${current}/${total}`);
+          if (data.statusText) {
+            setBackupStatusText(data.statusText);
+          } else if (data.phase === 'checking') {
+            setBackupStatusText('Checking Drive');
+          } else if (data.phase === 'uploading_packs') {
+            setBackupStatusText(`Uploading ${data.packsUploaded || 0}/${data.packsTotal || 1} packs`);
+          } else if (data.phase === 'writing_snapshot') {
+            setBackupStatusText('Writing snapshot');
           } else {
             setBackupStatusText('Backing up...');
           }
