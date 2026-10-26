@@ -27,6 +27,8 @@ playwright/.cache/
 /storage/
 *.db
 *.db-journal
+*oauth*.json
+*token*.json
 
 # Operating system files
 .DS_Store

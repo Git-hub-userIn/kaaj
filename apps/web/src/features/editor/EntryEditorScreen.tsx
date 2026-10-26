@@ -49,7 +49,7 @@ import {
 } from './storage/draft-store.js';
 import { ensureFontLoaded } from './font-loader.js';
 import { API_BASE_URL, AUTH_TOKEN } from '../../config/api.js';
-import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon } from 'lucide-react';
+import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud } from 'lucide-react';
 
 export interface EntryEditorScreenProps {
   entryId: string;
@@ -91,6 +91,67 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const processImageUploadRef = useRef<(file: File, targetPos?: number) => Promise<void>>();
+
+  // Backup state
+  const [backupStatus, setBackupStatus] = useState<'idle' | 'running' | 'failed'>('idle');
+  const [backupStatusText, setBackupStatusText] = useState('Backup: Up to date');
+
+  const fetchBackupStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/backup/status`, {
+        headers: { Authorization: AUTH_TOKEN },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBackupStatus(data.status);
+        if (data.status === 'running') {
+          setBackupStatusText('Backing up...');
+        } else if (data.status === 'failed') {
+          setBackupStatusText('Backup failed · Retry');
+        } else if (data.lastBackupTime) {
+          const date = new Date(data.lastBackupTime);
+          const diffMins = Math.round((Date.now() - date.getTime()) / 60000);
+          const timeStr = diffMins < 1 ? 'just now' : `${diffMins}m ago`;
+          setBackupStatusText(`Backup: ${timeStr}`);
+        } else {
+          setBackupStatusText('Backup: Ready');
+        }
+      }
+    } catch {
+      // Quietly ignore network failures
+    }
+  }, []);
+
+  const triggerBackup = useCallback(async () => {
+    setBackupStatus('running');
+    setBackupStatusText('Backing up...');
+    try {
+      const res = await fetch(`${API_BASE_URL}/backup/trigger`, {
+        method: 'POST',
+        headers: { Authorization: AUTH_TOKEN },
+      });
+      if (res.ok) {
+        setTimeout(() => fetchBackupStatus(), 1200);
+      } else {
+        setBackupStatus('failed');
+        setBackupStatusText('Backup failed · Retry');
+      }
+    } catch {
+      setBackupStatus('failed');
+      setBackupStatusText('Backup failed · Retry');
+    }
+  }, [fetchBackupStatus]);
+
+  useEffect(() => {
+    fetchBackupStatus();
+    return () => {
+      // Trigger debounced backup snapshot on entry close
+      fetch(`${API_BASE_URL}/backup/trigger`, {
+        method: 'POST',
+        headers: { Authorization: AUTH_TOKEN },
+      }).catch(() => {});
+    };
+  }, [fetchBackupStatus]);
 
   // Refs for autosave orchestration
   const entryRef = useRef<LoadedEntry | null>(null);
@@ -916,6 +977,37 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
               {saveStatus === 'saved' && <CheckCircle2 size={12} aria-hidden="true" />}
               {saveStatus === 'error' && <AlertCircle size={12} aria-hidden="true" />}
               <span>{saveStatusText}</span>
+            </button>
+
+            {/* Backup Status & Trigger */}
+            <button
+              type="button"
+              data-testid="backup-status-indicator"
+              aria-live="polite"
+              onClick={() => triggerBackup()}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                color:
+                  backupStatus === 'failed'
+                    ? COLOR_TOKENS.terracottaDark
+                    : COLOR_TOKENS.inkLight,
+                fontSize: '13px',
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                padding: '6px 8px',
+                borderRadius: RADIUS_TOKENS.sm,
+                textDecoration: backupStatus === 'failed' ? 'underline' : 'none',
+              }}
+              title="Click to back up now"
+            >
+              {backupStatus === 'running' && <RefreshCw size={12} className="spin" aria-hidden="true" />}
+              {backupStatus === 'idle' && <Cloud size={12} aria-hidden="true" />}
+              {backupStatus === 'failed' && <AlertCircle size={12} aria-hidden="true" />}
+              <span>{backupStatusText}</span>
             </button>
           </div>
         </header>

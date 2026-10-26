@@ -16,6 +16,13 @@ import {
 import { renderDocumentToPdf } from './services/pdf-service.js';
 import { CategoriesService } from './services/categories-service.js';
 import { authGuard } from './auth/guard.js';
+import { BackupService } from './backup/backup-service.js';
+import { LocalFolderBackupTarget } from './backup/local-backup-target.js';
+import {
+  GoogleDriveBackupTarget,
+  generateGoogleAuthUrl,
+  exchangeCodeForTokens,
+} from './backup/google-drive-backup-target.js';
 
 const app = new Hono();
 
@@ -41,6 +48,21 @@ const seedCoversDir = path.resolve(repoRoot, 'packages', 'design', 'assets', 'se
 
 const assetStore = new LocalDiskAssetStore(storageDir);
 const categoriesService = new CategoriesService(baseDataDir, assetStore, seedCoversDir);
+
+const defaultBackupDir = process.env.BACKUP_DIR || path.resolve(repoRoot, 'data', 'backup-snapshots');
+const tokenFilePath = process.env.GOOGLE_TOKEN_FILE || path.resolve(baseDataDir, 'google-oauth.json');
+
+const googleDriveTarget = new GoogleDriveBackupTarget({
+  clientId: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  redirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3001/auth/google/callback',
+  tokenFilePath,
+});
+
+const localBackupTarget = new LocalFolderBackupTarget(defaultBackupDir);
+const activeBackupTarget = googleDriveTarget.hasValidAuth() ? googleDriveTarget : localBackupTarget;
+const backupService = new BackupService(baseDataDir, activeBackupTarget);
+backupService.startPeriodicTimer();
 
 app.get('/health', (c) => {
   const bunGlobal = (globalThis as unknown as { Bun?: { version: string } }).Bun;
@@ -428,6 +450,94 @@ app.post('/export/pdf', async (c) => {
   } catch (err: any) {
     return c.json({ error: err.message || 'PDF export failed' }, 500);
   }
+});
+
+// Backup & Cloud Sync Endpoints
+app.get('/backup/status', (c) => {
+  const status = backupService.getStatus();
+  return c.json({
+    ...status,
+    target: backupService.getTarget().name,
+  });
+});
+
+app.post('/backup/trigger', async (c) => {
+  try {
+    const isAsync = c.req.query('wait') !== 'true';
+    if (isAsync) {
+      if (backupService.getStatus().status === 'running') {
+        return c.json({ status: 'already_running' });
+      }
+      // Trigger asynchronously in background without blocking
+      backupService.createSnapshot().catch((err) => {
+        console.warn('Background backup snapshot notice:', err.message || err);
+      });
+      return c.json({ status: 'triggered' });
+    }
+
+    const result = await backupService.createSnapshot();
+    return c.json({
+      success: true,
+      snapshotId: result.snapshotId,
+      uploadedCount: result.uploadedCount,
+      skippedCount: result.skippedCount,
+      manifest: result.manifest,
+    });
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Backup failed' }, 500);
+  }
+});
+
+app.get('/auth/google/url', (c) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3001/auth/google/callback';
+  if (!clientId) {
+    return c.json({ error: 'GOOGLE_CLIENT_ID is not configured in environment.' }, 400);
+  }
+  const url = generateGoogleAuthUrl(clientId, redirectUri);
+  return c.json({ url });
+});
+
+app.get('/auth/google/callback', async (c) => {
+  const code = c.req.query('code');
+  if (!code) {
+    return c.text('Missing authorization code.', 400);
+  }
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3001/auth/google/callback';
+
+  if (!clientId || !clientSecret) {
+    return c.text('Google OAuth credentials not configured on server.', 500);
+  }
+
+  try {
+    const tokens = await exchangeCodeForTokens(code, clientId, clientSecret, redirectUri);
+    await googleDriveTarget.saveTokens(tokens);
+    backupService.setTarget(googleDriveTarget);
+    return c.html(`<!DOCTYPE html>
+<html>
+  <head><title>Google Drive Connected</title></head>
+  <body style="font-family: sans-serif; text-align: center; padding: 40px;">
+    <h2>Google Drive Connected Successfully</h2>
+    <p>Your Kaaj entries and visual assets will now automatically back up to Google Drive.</p>
+    <p>You may safely close this window.</p>
+    <script>
+      window.opener?.postMessage('google-auth-success', '*');
+      setTimeout(() => window.close(), 1500);
+    </script>
+  </body>
+</html>`);
+  } catch (err: any) {
+    return c.text(`Google OAuth exchange failed: ${err.message}`, 500);
+  }
+});
+
+app.get('/auth/google/status', (c) => {
+  return c.json({
+    connected: googleDriveTarget.hasValidAuth(),
+    target: backupService.getTarget().name,
+  });
 });
 
 const PORT = Number(process.env.PORT || 3001);

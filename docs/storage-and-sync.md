@@ -189,13 +189,16 @@ Google OAuth 2.0 enforces specific refresh token lifetimes:
 - **Testing Publishing Status (7-Day Expiry):** When a Google Cloud project has an OAuth consent screen set to **External** with publishing status **Testing**, refresh tokens expire automatically after **7 days**. When expired, calls fail with HTTP 400 `invalid_grant: Token has been expired or revoked`.
 - **Production Publishing Status (Long-Lived):** To prevent 7-day token expiration, switch the Google Cloud project to **In Production**. In production status, refresh tokens remain valid until revoked, inactive for 6 months, or password change on sensitive accounts.
 - **Scope Restriction:** Kaaj requests the narrow scope `https://www.googleapis.com/auth/drive.file`. This scope grants access only to files and folders created or opened by Kaaj, protecting the user's broader Drive.
-- **Drive Code Notice:** Google Drive code integration is deferred to later phases; only architecture and contracts are specified here.
+- **Target Interface:** The backup service communicates through the `BackupTarget` interface (`put`, `list`, `get`). The backend supports both `LocalFolderBackupTarget` and `GoogleDriveBackupTarget`.
+- **Setup Guide:** Complete step-by-step Google Cloud project setup and verification procedures are documented in `docs/google-drive-setup.md`.
 
-### 4.2 Backup Policy
+### 4.2 Backup Policy & Incremental Snapshots
 
 - **Periodic Backup:** Runs every 15 minutes in the background, only if unbacked changes exist.
-- **Session Close Backup:** Triggers when the user closes or navigates away from an entry.
-- **Manual Backup:** Triggered on user demand via settings/backup action.
+- **Session Close Backup:** Triggers asynchronously when the user closes or navigates away from an entry.
+- **Manual Backup:** Triggered on user demand via the UI ("Backup now" button). Never blocks user typing.
+- **Incremental Snapshots:** Evaluates `snapshots/latest-manifest.json` on the target. Compares SHA-256 hashes of all chunks and assets. Only modified files are uploaded.
+- **Deterministic Restore:** `scripts/restore-snapshot.ts` downloads snapshot files, asserts SHA-256 integrity, and restores them into a clean destination directory. Rejects non-empty targets unless `--force` is specified.
 
 ### 4.3 Drive Directory Hierarchy
 

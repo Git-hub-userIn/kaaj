@@ -12,6 +12,7 @@ import {
   type EntryManifest,
   type ChunkPayload,
 } from '../packages/doc-model/src/index.js';
+import { migrateEntriesToChunks } from '../apps/api/src/services/migration-service.js';
 
 // Base URLs
 const API_BASE = 'http://localhost:3001';
@@ -410,110 +411,134 @@ test.describe('Kaaj Step 3 Chunked Storage Suite', () => {
     }
   });
 
-  // Test 5: Migration test with immutable backup
-  test('5. Migration verifies immutable backup exists and asserts canonical JSON equality', async () => {
+  // Test 5: Migration test with seeded 600-block v2 doc, text + images, real disk I/O & idempotency
+  test('5. Migration verifies immutable backup exists and asserts canonical JSON equality on 600-block doc', async () => {
+    test.setTimeout(60000);
     const repoRoot = findRepoRoot(process.cwd());
     const baseDataDir = path.join(repoRoot, 'data');
-    const backupsDir = path.join(baseDataDir, 'backups');
 
-    // 1. Verify an immutable backup directory exists before migration
-    let backupFound = false;
-    let backupFiles: string[] = [];
-
-    // Check backups folder and parent data directories
-    try {
-      const items = await fs.readdir(backupsDir, { withFileTypes: true });
-      for (const item of items) {
-        if (item.isDirectory() && item.name.includes('backup')) {
-          const files = await fs.readdir(path.join(backupsDir, item.name));
-          if (files.length > 0) {
-            backupFound = true;
-            backupFiles = files;
-            break;
-          }
-        }
+    // 1. Construct seeded 600-block document containing text, headings, and images
+    const blocks: TopLevelBlock[] = [];
+    for (let i = 0; i < 600; i++) {
+      if (i % 100 === 0) {
+        blocks.push({
+          type: 'heading',
+          attrs: { id: `blk_600_h_${i}`, level: 2, textAlign: 'left' },
+          content: [{ type: 'text', text: `Section Header at Block ${i}` }],
+        });
+      } else if (i === 50 || i === 150 || i === 300 || i === 450 || i === 580) {
+        blocks.push({
+          type: 'image',
+          attrs: {
+            id: `blk_600_img_${i}`,
+            assetId: `asset_seeded_img_${i}`,
+            alt: `Seeded test image at block ${i}`,
+            width: 0.8,
+            storageKey: `asset_seeded_img_${i}.png`,
+          },
+        });
+      } else {
+        blocks.push({
+          type: 'paragraph',
+          attrs: { id: `blk_600_p_${i}`, textAlign: 'left' },
+          content: [
+            {
+              type: 'text',
+              text: `Paragraph content line ${i + 1} verifying 600-block migration determinism and chunk splitting.`,
+            },
+          ],
+        });
       }
-    } catch {}
-
-    // Check parent data folder for backup directories
-    if (!backupFound) {
-      try {
-        const parentItems = await fs.readdir(path.dirname(baseDataDir), { withFileTypes: true });
-        for (const item of parentItems) {
-          if (item.isDirectory() && item.name.includes('backup')) {
-            const files = await fs.readdir(path.join(path.dirname(baseDataDir), item.name));
-            if (files.length > 0) {
-              backupFound = true;
-              backupFiles = files;
-              break;
-            }
-          }
-        }
-      } catch {}
     }
 
-    // Create an immutable backup snapshot if not yet created
-    if (!backupFound) {
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const backupDir = path.join(backupsDir, `backup-${timestamp}`);
-      await fs.mkdir(backupDir, { recursive: true });
-      await fs.writeFile(
-        path.join(backupDir, 'db-store-backup.json'),
-        JSON.stringify({ backupTimestamp: timestamp, status: 'immutable' }, null, 2),
-        'utf8'
-      );
-      backupFound = true;
-      backupFiles = ['db-store-backup.json'];
-    }
-
-    expect(backupFound).toBe(true);
-    expect(backupFiles.length).toBeGreaterThan(0);
-
-    // 2. Seed a multi-block v2 document
-    const originalDoc: DocumentEnvelopeV2 = {
+    const testEntryId = 'entry_mig_600_test';
+    const seededDoc: DocumentEnvelopeV2 = {
       schemaVersion: 2,
       doc: {
         type: 'doc',
-        content: [
-          {
-            type: 'heading',
-            attrs: { id: 'blk_seed_h1', level: 1, textAlign: 'left' },
-            content: [{ type: 'text', text: 'Migration Determinism Header' }],
-          },
-          ...Array.from({ length: 125 }, (_, i) => ({
-            type: 'paragraph' as const,
-            attrs: { id: `blk_seed_p_${i}`, textAlign: 'left' as const },
-            content: [{ type: 'text' as const, text: `Migration verification sentence line ${i + 1}.` }],
-          })),
-        ],
+        content: blocks,
       },
     };
 
-    // 3. Migrate document to chunked layout
-    const { manifest, chunks } = splitBlocksIntoChunks(
-      originalDoc.doc.content as TopLevelBlock[],
-      { entryId: 'entry_migration_val', version: 1 }
-    );
+    const seededEntry: any = {
+      id: testEntryId,
+      categoryId: 'cat_ideas',
+      title: 'Seeded 600 Block Migration Test Entry',
+      version: 1,
+      doc: seededDoc,
+      weight: 12,
+      pinned: false,
+      sortOrder: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
-    expect(manifest.chunkCount).toBeGreaterThanOrEqual(3);
-    expect(chunks.length).toBe(manifest.chunkCount);
+    // 2. Execute migration against real disk data directory
+    const migrationResult = await migrateEntriesToChunks(baseDataDir, [seededEntry]);
+    expect(migrationResult.migratedCount).toBe(1);
+    expect(migrationResult.backupPath).toBeTruthy();
 
-    // 4. Verify each chunk checksum matches computed content hash
-    for (const chunk of chunks) {
-      const meta = manifest.chunks.find((c) => c.id === chunk.chunkId);
-      expect(meta).toBeDefined();
-      expect(meta?.blockCount).toBe(chunk.blocks.length);
+    // 3. Assert backup directory exists and contains real files with bytes > 0
+    const backupDirExists = fsSync.existsSync(migrationResult.backupPath);
+    expect(backupDirExists).toBe(true);
 
-      const calculatedHash = computeContentHash(chunk.blocks);
-      expect(meta?.checksum).toBe(calculatedHash);
+    const backupFiles = await fs.readdir(migrationResult.backupPath);
+    expect(backupFiles.length).toBeGreaterThan(0);
+
+    // Verify at least one file has real non-zero bytes
+    let totalBackupBytes = 0;
+    for (const bf of backupFiles) {
+      const stat = await fs.stat(path.join(migrationResult.backupPath, bf));
+      totalBackupBytes += stat.size;
+    }
+    expect(totalBackupBytes).toBeGreaterThan(0);
+
+    // 4. Read generated chunks and manifest from disk
+    const chunksDir = path.join(baseDataDir, 'entries', testEntryId, 'chunks');
+    const manifestPath = path.join(baseDataDir, 'entries', testEntryId, 'manifest.json');
+
+    expect(fsSync.existsSync(chunksDir)).toBe(true);
+    expect(fsSync.existsSync(manifestPath)).toBe(true);
+
+    const rawManifest = await fs.readFile(manifestPath, 'utf8');
+    const diskManifest: EntryManifest = JSON.parse(rawManifest);
+    // 600 blocks split by 50 blocks per chunk = 12 chunks
+    expect(diskManifest.chunkCount).toBe(12);
+    expect(diskManifest.chunks.length).toBe(12);
+
+    // Read all chunk files from disk
+    const diskChunks: ChunkPayload[] = [];
+    for (const chunkMeta of diskManifest.chunks) {
+      const chunkFilePath = path.join(chunksDir, `${chunkMeta.id}.json`);
+      expect(fsSync.existsSync(chunkFilePath)).toBe(true);
+      const rawChunk = await fs.readFile(chunkFilePath, 'utf8');
+      const chunkData: ChunkPayload = JSON.parse(rawChunk);
+      diskChunks.push(chunkData);
+
+      // Verify content hash matches manifest checksum
+      const computedHash = computeContentHash(chunkData.blocks);
+      expect(chunkMeta.checksum).toBe(computedHash);
     }
 
-    // 5. Reassemble chunks and assert exact canonical JSON equality
-    const reassembledDoc = reassembleDocFromChunks(chunks);
-    const originalJson = canonicalDocJson(originalDoc);
-    const reassembledJson = canonicalDocJson(reassembledDoc);
-
+    // 5. Reassemble chunks from disk and assert canonical JSON matches original doc
+    const reassembled = reassembleDocFromChunks(diskChunks);
+    const originalJson = canonicalDocJson(seededDoc);
+    const reassembledJson = canonicalDocJson(reassembled);
     expect(reassembledJson).toBe(originalJson);
+
+    // 6. Re-run migration to assert idempotency (re-running changes nothing)
+    const secondMigration = await migrateEntriesToChunks(baseDataDir, [seededEntry]);
+    expect(secondMigration.migratedCount).toBe(1);
+
+    const rawManifest2 = await fs.readFile(manifestPath, 'utf8');
+    const diskManifest2: EntryManifest = JSON.parse(rawManifest2);
+    expect(diskManifest2.chunkCount).toBe(diskManifest.chunkCount);
+    expect(diskManifest2.chunks).toEqual(diskManifest.chunks);
+
+    // Clean up temporary test files
+    try {
+      await fs.rm(path.join(baseDataDir, 'entries', testEntryId), { recursive: true, force: true });
+    } catch {}
   });
 
   // Test 6: Forced failure while saving a chunk

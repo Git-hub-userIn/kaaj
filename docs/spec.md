@@ -249,6 +249,14 @@ kaaj/
 - Local IndexedDB drafts and vault journal replay uncommitted edits onto the base state.
 - Data loss must not occur.
 
+### 8.5 Backup target and Google Drive architecture (LOCKED)
+
+- **Target Abstraction:** Backups sit behind a unified `BackupTarget` interface (`put`, `list`, `get`). Implementations include `LocalFolderBackupTarget` (for offline/testing) and `GoogleDriveBackupTarget` (cloud snapshots).
+- **Google Drive Auth & Scope:** Standard OAuth 2.0 consent flow. Refresh tokens store locally in `data/google-oauth.json` (gitignored). Uses the narrow scope `https://www.googleapis.com/auth/drive.file`. Google Cloud project publishing status is set to **In production** to avoid the 7-day testing refresh token expiry.
+- **Incremental Snapshots:** Snapshots diff previous manifests by SHA-256 checksums and upload only modified chunks and new assets.
+- **Triggers:** Manual UI button ("Backup now"), periodic background timer (every 15 minutes only if data hash changed), and on entry close (debounced). Backups run asynchronously and never block typing.
+- **Restore Safety:** Restores snapshots into clean directories with SHA-256 integrity validation. Rejects non-empty target directories unless `--force` is explicitly provided.
+
 ## 9. Assets and images
 
 ### 9.1 Asset requirements (LOCKED)

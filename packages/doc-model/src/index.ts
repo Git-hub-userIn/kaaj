@@ -908,11 +908,31 @@ export function splitBlocksIntoChunks(
 
   const chunks: ChunkPayload[] = [];
   const manifestChunks: ChunkMetadata[] = [];
+  const claimedExistingIds = new Set<string>();
 
   chunkGroups.forEach((group, index) => {
-    const stableId = existingChunks[index]?.id || `chk_${String(index + 1).padStart(2, '0')}`;
-    const serialized = JSON.stringify(group);
     const checksum = computeContentHash(group);
+    let stableId: string | undefined;
+
+    // Match existing chunk by checksum first, then positional fallback
+    const contentMatch = existingChunks.find(
+      (ec) => ec.checksum === checksum && !claimedExistingIds.has(ec.id)
+    );
+    if (contentMatch) {
+      stableId = contentMatch.id;
+    } else if (existingChunks[index] && !claimedExistingIds.has(existingChunks[index].id)) {
+      stableId = existingChunks[index].id;
+    } else {
+      let counter = index + 1;
+      stableId = `chk_${String(counter).padStart(2, '0')}`;
+      while (claimedExistingIds.has(stableId)) {
+        counter++;
+        stableId = `chk_${String(counter).padStart(2, '0')}`;
+      }
+    }
+    claimedExistingIds.add(stableId);
+
+    const serialized = JSON.stringify(group);
     const byteSize = typeof TextEncoder !== 'undefined'
       ? new TextEncoder().encode(serialized).length
       : serialized.length;

@@ -1478,6 +1478,10 @@ export class CategoriesService {
     await fs.writeFile(tmpManifestPath, JSON.stringify(manifest, null, 2), 'utf8');
     await fs.rename(tmpManifestPath, manifestPath);
 
+    // Clean up stale chunk files on disk when chunks shrink
+    const activeChunkIds = new Set(manifest.chunks.map((c) => c.id));
+    await this.cleanupStaleChunks(chunksDir, activeChunkIds);
+
     // Update entry record
     entry.version = manifest.version;
     entry.weight = calculateWeight(manifest);
@@ -1700,17 +1704,7 @@ export class CategoriesService {
     }
 
     // Clean up old removed chunks
-    try {
-      const existingFiles = await fs.readdir(chunksDir);
-      for (const file of existingFiles) {
-        if (file.endsWith('.json')) {
-          const chkId = file.replace(/\.json$/, '');
-          if (!activeChunkIds.has(chkId)) {
-            await fs.unlink(path.join(chunksDir, file)).catch(() => {});
-          }
-        }
-      }
-    } catch {}
+    await this.cleanupStaleChunks(chunksDir, activeChunkIds);
 
     // Atomically write manifest
     const tmpManifestPath = `${manifestPath}.tmp`;
@@ -1758,5 +1752,25 @@ export class CategoriesService {
     this.entries.set(id, entry);
     await this.persist();
     return entry;
+  }
+
+  /**
+   * Delete unused chunk files on disk when an entry shrinks.
+   */
+  async cleanupStaleChunks(chunksDir: string, activeChunkIds: Set<string>): Promise<string[]> {
+    const deleted: string[] = [];
+    try {
+      const files = await fs.readdir(chunksDir);
+      for (const file of files) {
+        if (file.endsWith('.json')) {
+          const chkId = file.replace(/\.json$/, '');
+          if (!activeChunkIds.has(chkId)) {
+            await fs.unlink(path.join(chunksDir, file)).catch(() => {});
+            deleted.push(chkId);
+          }
+        }
+      }
+    } catch {}
+    return deleted;
   }
 }

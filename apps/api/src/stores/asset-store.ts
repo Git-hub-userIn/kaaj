@@ -132,7 +132,19 @@ export class LocalDiskAssetStore implements AssetStore {
   async getThumb(id: string, size: '320' | '960'): Promise<Buffer | null> {
     try {
       const filePath = path.join(this.thumbsDir, `${id}_${size}.webp`);
-      return await fs.readFile(filePath);
+      try {
+        return await fs.readFile(filePath);
+      } catch {
+        // On-demand generation if thumbnail is missing on disk
+        const record = this.getRecord(id);
+        if (!record) return null;
+        const orig = await this.get(record.storageKey);
+        if (!orig) return null;
+        const targetWidth = size === '960' ? 960 : 320;
+        const generated = await sharp(orig).resize(targetWidth).webp({ quality: 80 }).toBuffer();
+        await fs.writeFile(filePath, generated).catch(() => {});
+        return generated;
+      }
     } catch {
       return null;
     }

@@ -26,24 +26,14 @@ export async function createDataBackup(baseDataDir: string): Promise<string> {
   const backupParent = path.dirname(baseDataDir);
   const backupDir = path.join(backupParent, `data-backup-${timestamp}`);
 
-  // Also create a backup link/folder inside baseDataDir for internal tracking
-  const internalBackupDir = path.join(baseDataDir, 'backups', `backup-${timestamp}`);
-
   await fs.mkdir(backupDir, { recursive: true });
-  await fs.mkdir(internalBackupDir, { recursive: true });
 
-  // Copy data folder contents recursively to backupDir and internalBackupDir
+  // Copy data folder contents recursively to backupDir (excluding any nested backup folders)
   try {
     await fs.cp(baseDataDir, backupDir, {
       recursive: true,
-      filter: (src) => !src.includes('backups'),
+      filter: (src) => !src.includes('backups') && !src.includes('backup-snapshots'),
     });
-
-    const items = await fs.readdir(baseDataDir);
-    for (const item of items) {
-      if (item === 'backups') continue;
-      await fs.cp(path.join(baseDataDir, item), path.join(internalBackupDir, item), { recursive: true });
-    }
   } catch (err) {
     console.warn('Backup copy error:', err);
   }
