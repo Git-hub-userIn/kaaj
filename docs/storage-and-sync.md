@@ -419,4 +419,24 @@ Currently, packs and snapshots on Google Drive hold unencrypted plaintext data.
 4. Store encrypted blob hashes as `HMAC-SHA256(masterKey, plaintextHash)` to prevent metadata leakage while preserving deduplication.
 5. Encrypt pack footers, index files, and snapshot manifests with the master key.
 
+### 9.6 Automatic Maintenance and Sleeping Host Execution
+
+Kaaj runs background repository maintenance directly inside the API process.
+
+1. **In-Process Scheduler**: An internal timer evaluates repository health every 5 minutes.
+2. **Due and Idle Catch-Up Logic**:
+   - Maintenance runs when prune is due (last cleanup older than 7 days, or more than 50 packs under 1 MB, or remote files exceed 100).
+   - Maintenance executes only when the system is idle (no edits in the last 5 minutes, last backup verified, no active job lock).
+3. **Sleeping Host Behavior (Render Free Tier)**:
+   - Free tier hosts sleep during inactivity. Fixed clock cron jobs fail on sleeping hosts.
+   - Kaaj uses catch-up logic on wake. When an HTTP request wakes the server, the scheduler runs an immediate startup tick.
+   - No external cron service or third-party webhooks are required.
+4. **Safety Guards**:
+   - **Job Lock**: A lease with heartbeats and fencing tokens prevents concurrent backups and maintenance.
+   - **Two-Phase Delete**: Candidates are logged in `garbage.json`. Packs are deleted only after a 24-hour grace period.
+   - **50% Deletion Guard**: The engine aborts if a run targets more than 50% of repository packs.
+   - **Pre/Post Check**: `backup:check` runs before and after maintenance. Failures abort operations immediately.
+   - **Kill Switch**: Set `PRUNE_ENABLED=false` to disable maintenance entirely.
+
+
 

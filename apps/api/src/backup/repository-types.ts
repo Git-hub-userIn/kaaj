@@ -61,6 +61,7 @@ export interface BackupStatus {
   phase?: 'idle' | 'checking' | 'uploading_packs' | 'writing_snapshot' | 'done';
   statusText?: string;
   lastBackupTime: string | null;
+  lastCleanupTime?: string | null;
   lastError: string | null;
   lastSnapshotId: string | null;
   packsTotal?: number;
@@ -68,4 +69,5 @@ export interface BackupStatus {
   uploadedCount?: number;
   totalFiles?: number;
   processedCount?: number;
+  remoteFileCount?: number;
 }

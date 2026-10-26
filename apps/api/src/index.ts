@@ -20,6 +20,8 @@ import { BackupService } from './backup/backup-service.js';
 import { LocalFolderBackupTarget } from './backup/local-backup-target.js';
 import { pruneBackups } from './backup/backup-prune.js';
 import { checkBackupRepository } from './backup/backup-check.js';
+import { MaintenanceService } from './backup/maintenance-service.js';
+import { MaintenanceScheduler } from './backup/maintenance-scheduler.js';
 import {
   GoogleDriveBackupTarget,
   generateGoogleAuthUrl,
@@ -66,7 +68,12 @@ const googleDriveTarget = new GoogleDriveBackupTarget({
 const localBackupTarget = new LocalFolderBackupTarget(defaultBackupDir);
 const activeBackupTarget = googleDriveTarget.hasValidAuth() ? googleDriveTarget : localBackupTarget;
 const backupService = new BackupService(baseDataDir, activeBackupTarget);
+const maintenanceService = new MaintenanceService(baseDataDir, activeBackupTarget);
+backupService.setMaintenanceService(maintenanceService);
 backupService.startPeriodicTimer();
+
+const maintenanceScheduler = new MaintenanceScheduler(maintenanceService);
+maintenanceScheduler.start();
 
 app.get('/health', (c) => {
   const bunGlobal = (globalThis as unknown as { Bun?: { version: string } }).Bun;
@@ -197,6 +204,7 @@ app.post('/entries', async (c) => {
     }
 
     const entry = await categoriesService.createEntry(categoryId, title, color, pinned, spine, parseResult.data.doc);
+    maintenanceService.recordEdit();
     return c.json(entry, 201);
   } catch (err: any) {
     return c.json({ error: err.message || 'Failed to create entry' }, 422);
@@ -216,6 +224,7 @@ app.patch('/entries/:id', async (c) => {
     if (!updated) {
       return c.json({ error: 'Entry not found' }, 404);
     }
+    maintenanceService.recordEdit();
     return c.json(updated);
   } catch (err: any) {
     return c.json({ error: err.message || 'Failed to update entry' }, 422);
@@ -228,6 +237,7 @@ app.delete('/entries/:id', async (c) => {
   if (!deleted) {
     return c.json({ error: 'Entry not found' }, 404);
   }
+  maintenanceService.recordEdit();
   return c.json({ success: true, id });
 });
 
@@ -295,6 +305,7 @@ app.put('/entries/:id', async (c) => {
     if ('conflict' in result) {
       return c.json({ error: 'Version conflict', currentVersion: result.currentVersion }, 409);
     }
+    maintenanceService.recordEdit();
     c.header('ETag', `"${result.entry.version}"`);
     return c.json({
       id: result.entry.id,
@@ -362,6 +373,7 @@ app.put('/entries/:id/chunks/:chunkId', async (c) => {
       return c.json({ error: 'Version conflict', currentVersion: result.currentVersion }, 409);
     }
 
+    maintenanceService.recordEdit();
     c.header('ETag', `"${result.version}"`);
     return c.json(result);
   } catch (err: any) {
@@ -462,12 +474,26 @@ app.post('/export/pdf', async (c) => {
 });
 
 // Backup & Cloud Sync Endpoints
-app.get('/backup/status', (c) => {
+app.get('/backup/status', async (c) => {
   const status = backupService.getStatus();
+  const mState = await maintenanceService.getState();
   return c.json({
     ...status,
+    lastCleanupTime: mState.lastPruneAt,
+    lastPruneResult: mState.lastResult,
+    remoteFileCount: status.remoteFileCount ?? mState.remoteFileCount ?? 0,
     target: backupService.getTarget().name,
   });
+});
+
+app.get('/backup/maintenance', async (c) => {
+  try {
+    const state = await maintenanceService.getState();
+    const evaluation = await maintenanceService.isPruneDueAndIdle();
+    return c.json({ state, evaluation });
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to inspect maintenance' }, 500);
+  }
 });
 
 app.post('/backup/trigger', async (c) => {
@@ -507,9 +533,11 @@ app.post('/backup/trigger', async (c) => {
 
 app.post('/backup/prune', async (c) => {
   try {
-    const apply = c.req.query('apply') === 'true';
-    const keepLast = Number(c.req.query('keep')) || 5;
-    const result = await pruneBackups(backupService.getTarget(), { keepLast, apply });
+    const force = c.req.query('force') === 'true';
+    const result = await maintenanceService.runMaintenance({
+      force,
+      skipIdleCheck: true, // Manual user invocation bypasses idle edit check
+    });
     return c.json(result);
   } catch (err: any) {
     return c.json({ error: err.message || 'Prune failed' }, 500);
@@ -553,6 +581,7 @@ app.get('/auth/google/callback', async (c) => {
     const tokens = await exchangeCodeForTokens(code, clientId, clientSecret, redirectUri);
     await googleDriveTarget.saveTokens(tokens);
     backupService.setTarget(googleDriveTarget);
+    maintenanceService.setTarget(googleDriveTarget);
     return c.html(`<!DOCTYPE html>
 <html>
   <head><title>Google Drive Connected</title></head>

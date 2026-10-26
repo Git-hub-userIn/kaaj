@@ -1,5 +1,6 @@
 import React from 'react';
 import { COLOR_TOKENS, TYPOGRAPHY_TOKENS, SPACING_TOKENS, RADIUS_TOKENS, CURRENT_USER } from '@kaaj/design';
+import { GlobalBackupStatus } from '../backup/GlobalBackupStatus';
 
 export const HomeHeader: React.FC = () => {
   return (
@@ -57,32 +58,36 @@ export const HomeHeader: React.FC = () => {
         </div>
       </div>
 
-      {/* Static avatar circle with initials "JC" - ONLY header control */}
-      <div
-        data-testid="user-avatar"
-        role="img"
-        aria-label={`User profile: ${CURRENT_USER.name} (${CURRENT_USER.initials})`}
-        tabIndex={0}
-        style={{
-          width: '38px',
-          height: '38px',
-          borderRadius: RADIUS_TOKENS.full,
-          backgroundColor: COLOR_TOKENS.paperSubtle,
-          border: `1.5px solid ${COLOR_TOKENS.border}`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
-          fontSize: '13px',
-          fontWeight: 600,
-          color: COLOR_TOKENS.ink,
-          letterSpacing: '0.04em',
-          boxShadow: '0 1px 3px rgba(45, 35, 25, 0.08)',
-          cursor: 'default',
-          userSelect: 'none',
-        }}
-      >
-        {CURRENT_USER.initials}
+      {/* Global backup status + User avatar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <GlobalBackupStatus />
+
+        <div
+          data-testid="user-avatar"
+          role="img"
+          aria-label={`User profile: ${CURRENT_USER.name} (${CURRENT_USER.initials})`}
+          tabIndex={0}
+          style={{
+            width: '38px',
+            height: '38px',
+            borderRadius: RADIUS_TOKENS.full,
+            backgroundColor: COLOR_TOKENS.paperSubtle,
+            border: `1.5px solid ${COLOR_TOKENS.border}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+            fontSize: '13px',
+            fontWeight: 600,
+            color: COLOR_TOKENS.ink,
+            letterSpacing: '0.04em',
+            boxShadow: '0 1px 3px rgba(45, 35, 25, 0.08)',
+            cursor: 'default',
+            userSelect: 'none',
+          }}
+        >
+          {CURRENT_USER.initials}
+        </div>
       </div>
     </header>
   );

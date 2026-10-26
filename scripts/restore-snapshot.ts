@@ -114,27 +114,18 @@ export async function restoreSnapshot(
   let snapshotManifest: SnapshotManifestV3 | null = null;
 
   if (snapshotIdArg === 'latest') {
-    const rawLatest = await target.get('snapshots/latest.json');
-    if (rawLatest) {
-      try {
-        snapshotManifest = JSON.parse(rawLatest.toString('utf8'));
-      } catch {}
+    const snapFiles = await target.list('snapshots');
+    const filtered = snapFiles.filter((f) => !f.path.endsWith('latest.json') && f.path.endsWith('.json'));
+    if (filtered.length === 0) {
+      throw new Error('No snapshots found in backup repository.');
     }
-
-    if (!snapshotManifest) {
-      const snapFiles = await target.list('snapshots');
-      const filtered = snapFiles.filter((f) => !f.path.endsWith('latest.json'));
-      if (filtered.length === 0) {
-        throw new Error('No snapshots found in backup repository.');
-      }
-      filtered.sort((a, b) => a.path.localeCompare(b.path));
-      const latestFile = filtered[filtered.length - 1];
-      const raw = await target.get(latestFile.path);
-      if (!raw) {
-        throw new Error(`Failed to read snapshot file: ${latestFile.path}`);
-      }
-      snapshotManifest = JSON.parse(raw.toString('utf8'));
+    filtered.sort((a, b) => a.path.localeCompare(b.path));
+    const latestFile = filtered[filtered.length - 1];
+    const raw = await target.get(latestFile.path);
+    if (!raw) {
+      throw new Error(`Failed to read snapshot file: ${latestFile.path}`);
     }
+    snapshotManifest = JSON.parse(raw.toString('utf8'));
   } else {
     const snapPath = snapshotIdArg.startsWith('snapshots/')
       ? snapshotIdArg

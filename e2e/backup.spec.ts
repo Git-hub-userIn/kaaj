@@ -10,6 +10,7 @@ import { LocalFolderBackupTarget } from '../apps/api/src/backup/local-backup-tar
 import { BackupService } from '../apps/api/src/backup/backup-service.js';
 import { pruneBackups } from '../apps/api/src/backup/backup-prune.js';
 import { checkBackupRepository } from '../apps/api/src/backup/backup-check.js';
+import { readPackFooter } from '../apps/api/src/backup/pack-format.js';
 import { fetchWithRetry } from '../apps/api/src/backup/drive-retry.js';
 import { GoogleDriveBackupTarget } from '../apps/api/src/backup/google-drive-backup-target.js';
 import {
@@ -438,24 +439,80 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
     await fs.mkdir(testSourceDir, { recursive: true });
     await fs.mkdir(testBackupDir, { recursive: true });
 
-    // Seed initial files
-    await fs.writeFile(path.join(testSourceDir, 'db-store.json'), JSON.stringify({ v: 1, title: 'Original DB' }));
+    // Seed realistic initial document
+    const originalDoc: DocumentEnvelopeV2 = {
+      schemaVersion: 2,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            attrs: { id: 'blk_kill_1' },
+            content: [{ type: 'text', text: 'Baseline robust paragraph before crash.' }],
+          },
+          {
+            type: 'paragraph',
+            attrs: { id: 'blk_kill_2' },
+            content: [{ type: 'text', text: 'Second persistent paragraph verified by canonical JSON.' }],
+          },
+        ],
+      },
+    };
+
     const entDir = path.join(testSourceDir, 'entries', 'ent_kill');
     await fs.mkdir(path.join(entDir, 'chunks'), { recursive: true });
-    await fs.writeFile(path.join(entDir, 'manifest.json'), JSON.stringify({ id: 'ent_kill' }));
-    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_0.json'), JSON.stringify({ text: 'Baseline text' }));
+    await fs.writeFile(path.join(testSourceDir, 'db-store.json'), JSON.stringify({ v: 1, title: 'Original DB' }));
+
+    const origChunk: ChunkPayload = {
+      schemaVersion: 2,
+      chunkId: 'chunk_0',
+      entryId: 'ent_kill',
+      order: 0,
+      blocks: originalDoc.doc.content as TopLevelBlock[],
+    };
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_0.json'), JSON.stringify(origChunk));
+
+    const origManifest: EntryManifest = {
+      entryId: 'ent_kill',
+      schemaVersion: 2,
+      version: 1,
+      totalBlocks: 2,
+      chunkCount: 1,
+      chunks: [
+        {
+          id: 'chunk_0',
+          order: 0,
+          blockCount: 2,
+          bytes: Buffer.byteLength(JSON.stringify(origChunk), 'utf8'),
+          checksum: crypto.createHash('sha256').update(JSON.stringify(origChunk)).digest('hex'),
+        },
+      ],
+    };
+    await fs.writeFile(path.join(entDir, 'manifest.json'), JSON.stringify(origManifest));
 
     const localTarget = new LocalFolderBackupTarget(testBackupDir);
     const service = new BackupService(testSourceDir, localTarget);
 
     // Initial successful baseline snapshot
+    const baselineStart = Date.now();
     const baselineSnap = await service.createSnapshot();
+    const baselineElapsed = Date.now() - baselineStart;
     expect(baselineSnap.uploadedPacks).toBe(1);
 
-    // Add new modified chunk
-    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_1.json'), JSON.stringify({ text: 'Crashing text' }));
+    // Rigorously assert physical pack file on disk
+    const packFilesOnDisk = await fs.readdir(path.join(testBackupDir, 'packs'));
+    expect(packFilesOnDisk.length).toBe(1);
+    const diskPackPath = path.join(testBackupDir, 'packs', packFilesOnDisk[0]);
+    expect(fsSync.existsSync(diskPackPath)).toBe(true);
 
-    // Target that simulates a process crash during pack upload
+    const packBuf = await fs.readFile(diskPackPath);
+    expect(packBuf.length).toBeGreaterThan(50);
+    const footer = readPackFooter(packBuf);
+    expect(footer.blobs.length).toBeGreaterThanOrEqual(3); // db, manifest, chunk
+
+    // Now introduce an edit and simulate a crash mid-upload of the next snapshot
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_1.json'), JSON.stringify({ text: 'Incomplete edit' }));
+
     class CrashingTarget extends LocalFolderBackupTarget {
       override async put(relativePath: string, data: Buffer | Uint8Array, mimeType?: string) {
         if (relativePath.startsWith('packs/')) {
@@ -470,15 +527,18 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
 
     await expect(crashingService.createSnapshot()).rejects.toThrow(/Simulated network crash/);
 
-    // Restore latest snapshot: baseline must still restore cleanly and perfectly!
+    // Restore latest snapshot: baseline snapshot must restore completely and cleanly!
     const restoreResult = await restoreSnapshot(localTarget, restoreCleanDir, { force: true });
     expect(restoreResult.snapshotId).toBe(baselineSnap.snapshotId);
     expect(fsSync.existsSync(path.join(restoreCleanDir, 'db-store.json'))).toBe(true);
 
-    const restoredChunk = JSON.parse(
+    const restoredChunk: ChunkPayload = JSON.parse(
       await fs.readFile(path.join(restoreCleanDir, 'entries', 'ent_kill', 'chunks', 'chunk_0.json'), 'utf8')
     );
-    expect(restoredChunk.text).toBe('Baseline text');
+    const restoredDoc = reassembleDocFromChunks([restoredChunk]);
+    expect(canonicalDocJson(restoredDoc)).toBe(canonicalDocJson(originalDoc));
+
+    console.log(`[TEST 9] Verified physical disk pack (${packBuf.length} bytes, ${footer.blobs.length} blobs) in ${baselineElapsed}ms`);
 
     await fs.rm(testSourceDir, { recursive: true, force: true });
     await fs.rm(testBackupDir, { recursive: true, force: true });
@@ -546,28 +606,48 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
     await fs.mkdir(testSourceDir, { recursive: true });
     await fs.mkdir(testBackupDir, { recursive: true });
 
-    await fs.writeFile(path.join(testSourceDir, 'db-store.json'), JSON.stringify({ v: 1 }));
+    await fs.writeFile(path.join(testSourceDir, 'db-store.json'), JSON.stringify({ v: 1, name: 'Check Test DB' }));
+    const entDir = path.join(testSourceDir, 'entries', 'ent_check');
+    await fs.mkdir(path.join(entDir, 'chunks'), { recursive: true });
+    await fs.writeFile(path.join(entDir, 'manifest.json'), JSON.stringify({ id: 'ent_check' }));
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_0.json'), JSON.stringify({ text: 'Check chunk content' }));
+
     const localTarget = new LocalFolderBackupTarget(testBackupDir);
     const service = new BackupService(testSourceDir, localTarget);
 
-    await service.createSnapshot();
+    const snap = await service.createSnapshot();
+    expect(snap.uploadedPacks).toBe(1);
+
+    // Assert physical pack file exists on disk and verify its binary footer
+    const packFiles = await localTarget.list('packs');
+    expect(packFiles.length).toBeGreaterThan(0);
+    const packPath = path.join(testBackupDir, packFiles[0].path);
+    const originalPackBuf = await fs.readFile(packPath);
+    expect(originalPackBuf.length).toBeGreaterThan(50);
+
+    const footer = readPackFooter(originalPackBuf);
+    expect(footer.blobs.length).toBeGreaterThanOrEqual(3);
 
     // 1. Check healthy repo
     const healthyCheck = await checkBackupRepository(localTarget);
     expect(healthyCheck.ok).toBe(true);
     expect(healthyCheck.errors.length).toBe(0);
 
-    // 2. Intentionally delete a pack file to simulate corruption / data loss
-    const packs = await localTarget.list('packs');
-    expect(packs.length).toBeGreaterThan(0);
-    const packToDelete = path.join(testBackupDir, packs[0].path);
-    await fs.unlink(packToDelete);
+    // 2. Corrupt pack content (flip a byte in payload) and verify check detects hash mismatch
+    const corruptedPackBuf = Buffer.from(originalPackBuf);
+    corruptedPackBuf[10] = corruptedPackBuf[10] ^ 0xff; // Invert byte 10
+    await fs.writeFile(packPath, corruptedPackBuf);
 
-    // 3. Check corrupted repo
     const corruptedCheck = await checkBackupRepository(localTarget);
     expect(corruptedCheck.ok).toBe(false);
-    expect(corruptedCheck.errors.length).toBeGreaterThan(0);
-    expect(corruptedCheck.errors[0]).toContain('Missing pack');
+    expect(corruptedCheck.errors.some((e) => e.includes('Pack hash mismatch'))).toBe(true);
+
+    // 3. Intentionally delete pack file to simulate data loss / remote deletion
+    await fs.unlink(packPath);
+
+    const missingPackCheck = await checkBackupRepository(localTarget);
+    expect(missingPackCheck.ok).toBe(false);
+    expect(missingPackCheck.errors.some((e) => e.includes('Missing pack'))).toBe(true);
 
     await fs.rm(testSourceDir, { recursive: true, force: true });
     await fs.rm(testBackupDir, { recursive: true, force: true });

@@ -48,6 +48,7 @@ import {
   type EntryDraft,
 } from './storage/draft-store.js';
 import { ensureFontLoaded } from './font-loader.js';
+import { GlobalBackupStatus } from '../backup/GlobalBackupStatus.js';
 import { API_BASE_URL, AUTH_TOKEN } from '../../config/api.js';
 import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud } from 'lucide-react';
 
@@ -1001,36 +1002,8 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
               <span>{saveStatusText}</span>
             </button>
 
-            {/* Backup Status & Trigger */}
-            <button
-              type="button"
-              data-testid="backup-status-indicator"
-              aria-live="polite"
-              onClick={() => triggerBackup()}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                backgroundColor: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                color:
-                  backupStatus === 'failed'
-                    ? COLOR_TOKENS.terracottaDark
-                    : COLOR_TOKENS.inkLight,
-                fontSize: '13px',
-                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
-                padding: '6px 8px',
-                borderRadius: RADIUS_TOKENS.sm,
-                textDecoration: backupStatus === 'failed' ? 'underline' : 'none',
-              }}
-              title="Click to back up now"
-            >
-              {backupStatus === 'running' && <RefreshCw size={12} className="spin" aria-hidden="true" />}
-              {backupStatus === 'idle' && <Cloud size={12} aria-hidden="true" />}
-              {backupStatus === 'failed' && <AlertCircle size={12} aria-hidden="true" />}
-              <span>{backupStatusText}</span>
-            </button>
+            {/* Global Backup Status & Actions */}
+            <GlobalBackupStatus compact={true} />
           </div>
         </header>
 

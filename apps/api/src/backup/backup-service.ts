@@ -28,7 +28,12 @@ export {
   type BackupStatus,
 };
 
-const TARGET_PACK_SIZE = 4 * 1024 * 1024; // 4 MB target pack size
+export const DEFAULT_PACK_TARGET_BYTES = 8 * 1024 * 1024; // 8 MB target pack size
+export function getPackTargetBytes(): number {
+  const envVal = Number(process.env.PACK_TARGET_BYTES);
+  return envVal && !isNaN(envVal) && envVal > 0 ? envVal : DEFAULT_PACK_TARGET_BYTES;
+}
+
 const LARGE_ASSET_THRESHOLD = 2 * 1024 * 1024; // Assets >= 2 MB get their own pack
 
 /**
@@ -80,10 +85,18 @@ export class BackupService {
   };
   private intervalTimer: NodeJS.Timeout | null = null;
   private lastDataHash: string | null = null;
+  private maintenanceService?: {
+    saveState: (state: any) => Promise<void>;
+    getState: () => Promise<any>;
+  };
 
   constructor(baseDataDir: string, target: BackupTarget) {
     this.baseDataDir = baseDataDir;
     this.target = target;
+  }
+
+  setMaintenanceService(service: any): void {
+    this.maintenanceService = service;
   }
 
   setTarget(target: BackupTarget): void {
@@ -231,6 +244,9 @@ export class BackupService {
     remoteBlobs: Map<string, BlobIndexRecord>;
     remotePacks: Set<string>;
     snapshots: string[];
+    packFilesCount: number;
+    indexFilesCount: number;
+    snapshotFilesCount: number;
   }> {
     const [packFiles, indexFiles, snapshotFiles] = await Promise.all([
       this.target.list('packs'),
@@ -264,8 +280,16 @@ export class BackupService {
       }
     });
 
-    const snapshots = snapshotFiles.map((s) => path.basename(s.path).replace(/\.json$/, ''));
-    return { remoteBlobs, remotePacks, snapshots };
+    const validSnapshots = snapshotFiles.filter((s) => !s.path.endsWith('latest.json') && s.path.endsWith('.json'));
+    const snapshots = validSnapshots.map((s) => path.basename(s.path).replace(/\.json$/, ''));
+    return {
+      remoteBlobs,
+      remotePacks,
+      snapshots,
+      packFilesCount: packFiles.length,
+      indexFilesCount: indexFiles.length,
+      snapshotFilesCount: validSnapshots.length,
+    };
   }
 
   /**
@@ -297,7 +321,15 @@ export class BackupService {
       );
 
       // Phase 1: Checking remote state
-      const { remoteBlobs, remotePacks, snapshots } = await this.loadRemoteIndex();
+      const {
+        remoteBlobs,
+        remotePacks,
+        snapshots,
+        packFilesCount,
+        indexFilesCount,
+        snapshotFilesCount,
+      } = await this.loadRemoteIndex();
+      const currentRemoteFiles = packFilesCount + indexFilesCount + snapshotFilesCount;
 
       // Phase 2: Local Scan
       const localBlobs = await this.scanLocalBlobs();
@@ -335,12 +367,22 @@ export class BackupService {
       ) {
         this.status.status = 'idle';
         this.status.phase = 'done';
-        this.status.statusText = 'Backup: Up to date';
+        this.status.remoteFileCount = currentRemoteFiles;
+        this.status.statusText = `Backup: Up to date (remote files: ${currentRemoteFiles})`;
         this.status.packsTotal = 0;
         this.status.packsUploaded = 0;
         this.status.uploadedCount = 0;
         this.status.processedCount = localBlobs.length;
         this.lastDataHash = await this.computeQuickDataHash();
+
+        if (this.maintenanceService) {
+          try {
+            const mState = await this.maintenanceService.getState();
+            mState.lastBackupAt = latestSnapshotManifest.createdAt;
+            mState.remoteFileCount = currentRemoteFiles;
+            await this.maintenanceService.saveState(mState);
+          } catch {}
+        }
 
         return {
           snapshotId: latestSnapshotManifest.snapshotId,
@@ -352,6 +394,7 @@ export class BackupService {
       }
 
       // Phase 3: Pack new blobs
+      const targetPackBytes = getPackTargetBytes();
       const packsToUpload: PackBuildResult[] = [];
       const pendingPackBlobs: PackBlobInput[] = [];
       let currentPackBytes = 0;
@@ -369,7 +412,7 @@ export class BackupService {
         pendingPackBlobs.push({ hash: b.hash, data: buf, type: b.type });
         currentPackBytes += buf.length;
 
-        if (currentPackBytes >= TARGET_PACK_SIZE) {
+        if (currentPackBytes >= targetPackBytes) {
           const pack = createPack(pendingPackBlobs);
           packsToUpload.push(pack);
           pendingPackBlobs.length = 0;
@@ -529,17 +572,37 @@ export class BackupService {
 
       // Ordering rule: Write snapshot file LAST!
       await this.target.put(`snapshots/${snapshotId}.json`, finalManifestBuf, 'application/json');
-      await this.target.put(`snapshots/latest.json`, finalManifestBuf, 'application/json');
+
+      const totalRemoteFiles =
+        packFilesCount +
+        packsToUpload.length +
+        (newBlobIndexRecords.length > 0 ? indexFilesCount + 1 : indexFilesCount) +
+        (snapshotFilesCount + 1);
+
+      const packSizes = packsToUpload.map((p) => p.buffer.length);
+      console.log(
+        `[BACKUP] Run complete: ${packsToUpload.length} packs created. Size distribution: [${packSizes.join(', ')}] bytes. Remote file count: ${totalRemoteFiles}.`
+      );
 
       // Phase 6: Done
       this.status.status = 'idle';
       this.status.phase = 'done';
-      this.status.statusText = 'Backup: Up to date';
+      this.status.remoteFileCount = totalRemoteFiles;
+      this.status.statusText = `Backup: Up to date (remote files: ${totalRemoteFiles})`;
       this.status.lastBackupTime = snapshotManifest.createdAt;
       this.status.lastSnapshotId = snapshotId;
       this.status.uploadedCount = packsToUpload.length;
       this.status.processedCount = localBlobs.length;
       this.lastDataHash = await this.computeQuickDataHash();
+
+      if (this.maintenanceService) {
+        try {
+          const mState = await this.maintenanceService.getState();
+          mState.lastBackupAt = snapshotManifest.createdAt;
+          mState.remoteFileCount = totalRemoteFiles;
+          await this.maintenanceService.saveState(mState);
+        } catch {}
+      }
 
       return {
         snapshotId,
