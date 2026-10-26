@@ -15,33 +15,46 @@ export const HomeHeader: React.FC = () => {
         boxSizing: 'border-box',
       }}
     >
-      {/* Kaaj Wordmark at top left */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: SPACING_TOKENS.sm }}>
-        <h1
-          data-testid="kaaj-wordmark"
+      {/* Kaaj Brand Lockup (Extracted Morpankh Logo + App Typography) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <img
+          src="/favicon.svg"
+          alt="Kaaj Logo"
           style={{
-            margin: 0,
-            fontFamily: TYPOGRAPHY_TOKENS.fontFamilySerif,
-            fontSize: '32px',
-            fontWeight: 700,
-            letterSpacing: '-0.02em',
-            color: COLOR_TOKENS.terracotta,
-            lineHeight: 1,
-          }}
-        >
-          Kaaj
-        </h1>
-        <span
-          style={{
-            fontFamily: TYPOGRAPHY_TOKENS.fontFamilyHandwriting,
-            fontSize: '18px',
-            color: COLOR_TOKENS.inkMuted,
-            opacity: 0.85,
+            width: '38px',
+            height: '38px',
+            display: 'block',
             userSelect: 'none',
           }}
-        >
-          काज
-        </span>
+        />
+
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: SPACING_TOKENS.sm }}>
+          <h1
+            data-testid="kaaj-wordmark"
+            style={{
+              margin: 0,
+              fontFamily: TYPOGRAPHY_TOKENS.fontFamilySerif,
+              fontSize: '32px',
+              fontWeight: 700,
+              letterSpacing: '-0.02em',
+              color: COLOR_TOKENS.terracotta,
+              lineHeight: 1,
+            }}
+          >
+            Kaaj
+          </h1>
+          <span
+            style={{
+              fontFamily: TYPOGRAPHY_TOKENS.fontFamilyHandwriting,
+              fontSize: '18px',
+              color: COLOR_TOKENS.inkMuted,
+              opacity: 0.85,
+              userSelect: 'none',
+            }}
+          >
+            काज
+          </span>
+        </div>
       </div>
 
       {/* Static avatar circle with initials "JC" - ONLY header control */}
