@@ -475,6 +475,14 @@ app.post('/backup/trigger', async (c) => {
       return c.json({ status: 'triggered' });
     }
 
+    if (backupService.getStatus().status === 'running') {
+      return c.json({
+        error: 'A backup snapshot is already in progress.',
+        status: 'running',
+        ...backupService.getStatus(),
+      }, 409);
+    }
+
     const result = await backupService.createSnapshot();
     return c.json({
       success: true,

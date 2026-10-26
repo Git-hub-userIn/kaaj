@@ -30,6 +30,7 @@ export interface BackupStatus {
   lastError: string | null;
   lastSnapshotId: string | null;
   uploadedCount: number;
+  totalFiles?: number;
 }
 
 export class BackupService {
@@ -193,6 +194,9 @@ export class BackupService {
       }
 
       // 3. Process each file: compute checksum, upload if changed
+      this.status.totalFiles = localFiles.length;
+      this.status.uploadedCount = 0;
+
       let uploadedCount = 0;
       let skippedCount = 0;
       let totalBytes = 0;
@@ -224,6 +228,7 @@ export class BackupService {
           // Upload changed file
           await this.target.put(item.relPath, buffer);
           uploadedCount++;
+          this.status.uploadedCount = uploadedCount;
         }
       }
 
