@@ -3,6 +3,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { BackupTarget, BackupFileRecord } from './backup-target.js';
+import { fetchWithRetry } from './drive-retry.js';
 
 export interface GoogleDriveConfig {
   clientId?: string;
@@ -10,6 +11,13 @@ export interface GoogleDriveConfig {
   redirectUri?: string;
   tokenFilePath: string; // Stored server-side, gitignored
   folderName?: string; // Default: 'Kaaj'
+  cacheFilePath?: string; // Gitignored file-id cache (default: drive-file-cache.json)
+}
+
+export interface DriveCacheEntry {
+  fileId: string;
+  checksum: string;
+  parentFolderId?: string;
 }
 
 export function generateGoogleAuthUrl(clientId: string, redirectUri: string): string {
@@ -30,7 +38,7 @@ export async function exchangeCodeForTokens(
   clientSecret: string,
   redirectUri: string
 ): Promise<{ refreshToken: string; accessToken: string; expiresAt: number }> {
-  const res = await fetch('https://oauth2.googleapis.com/token', {
+  const res = await fetchWithRetry('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -68,12 +76,67 @@ export class GoogleDriveBackupTarget implements BackupTarget {
   private config: GoogleDriveConfig;
   private rootFolderId: string | null = null;
   private folderCache: Map<string, string> = new Map(); // path -> folderId
+  private driveFileCache: Map<string, DriveCacheEntry> = new Map(); // relPath -> DriveCacheEntry
+  private cacheFilePath: string;
 
   constructor(config: GoogleDriveConfig) {
     this.config = {
       folderName: 'Kaaj',
       ...config,
     };
+    this.cacheFilePath =
+      config.cacheFilePath ||
+      path.resolve(path.dirname(this.config.tokenFilePath), 'drive-file-cache.json');
+    this.loadCacheSync();
+  }
+
+  /**
+   * Loads Drive file-id cache synchronously during initialization.
+   */
+  private loadCacheSync(): void {
+    try {
+      if (fsSync.existsSync(this.cacheFilePath)) {
+        const raw = fsSync.readFileSync(this.cacheFilePath, 'utf8');
+        const data: Record<string, DriveCacheEntry> = JSON.parse(raw);
+        for (const [key, val] of Object.entries(data)) {
+          if (val && typeof val.fileId === 'string') {
+            this.driveFileCache.set(key, val);
+          }
+        }
+      }
+    } catch {
+      this.driveFileCache.clear();
+    }
+  }
+
+  /**
+   * Persists Drive file-id cache atomically to disk.
+   */
+  async saveCache(): Promise<void> {
+    try {
+      await fs.mkdir(path.dirname(this.cacheFilePath), { recursive: true });
+      const record: Record<string, DriveCacheEntry> = {};
+      for (const [k, v] of this.driveFileCache.entries()) {
+        record[k] = v;
+      }
+      const tmp = `${this.cacheFilePath}.tmp`;
+      await fs.writeFile(tmp, JSON.stringify(record, null, 2), 'utf8');
+      await fs.rename(tmp, this.cacheFilePath);
+    } catch (err: any) {
+      console.warn('[Drive Target] Failed to save file cache to disk:', err.message || err);
+    }
+  }
+
+  /**
+   * Clears the in-memory and disk cache (used for cache loss verification).
+   */
+  async clearCache(): Promise<void> {
+    this.driveFileCache.clear();
+    try {
+      if (fsSync.existsSync(this.cacheFilePath)) {
+        await fs.unlink(this.cacheFilePath);
+      }
+    } catch {}
   }
 
   hasValidAuth(): boolean {
@@ -131,7 +194,7 @@ export class GoogleDriveBackupTarget implements BackupTarget {
       throw new Error('Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET environment variables.');
     }
 
-    const res = await fetch('https://oauth2.googleapis.com/token', {
+    const res = await fetchWithRetry('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -186,7 +249,7 @@ export class GoogleDriveBackupTarget implements BackupTarget {
 
       // Query for folder under parentId
       const q = `name = '${part}' and '${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
-      const searchRes = await fetch(
+      const searchRes = await fetchWithRetry(
         `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
@@ -196,7 +259,7 @@ export class GoogleDriveBackupTarget implements BackupTarget {
         parentId = searchData.files[0].id;
       } else {
         // Create folder
-        const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+        const createRes = await fetchWithRetry('https://www.googleapis.com/drive/v3/files', {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -223,7 +286,7 @@ export class GoogleDriveBackupTarget implements BackupTarget {
 
     const rootName = this.config.folderName || 'Kaaj';
     const q = `name = '${rootName}' and 'root' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
-    const searchRes = await fetch(
+    const searchRes = await fetchWithRetry(
       `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
@@ -234,7 +297,7 @@ export class GoogleDriveBackupTarget implements BackupTarget {
       return this.rootFolderId!;
     }
 
-    const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+    const createRes = await fetchWithRetry('https://www.googleapis.com/drive/v3/files', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -252,66 +315,88 @@ export class GoogleDriveBackupTarget implements BackupTarget {
     return this.rootFolderId!;
   }
 
-  async put(relativePath: string, data: Buffer | Uint8Array, mimeType = 'application/octet-stream'): Promise<BackupFileRecord> {
+  /**
+   * Fast check if a file already landed on Drive with matching checksum.
+   */
+  async has(relativePath: string, checksum: string): Promise<boolean> {
+    const cleanRel = relativePath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+    const cached = this.driveFileCache.get(cleanRel);
+    return Boolean(cached && cached.checksum === checksum);
+  }
+
+  async put(
+    relativePath: string,
+    data: Buffer | Uint8Array,
+    mimeType = 'application/octet-stream'
+  ): Promise<BackupFileRecord> {
     const accessToken = await this.getAccessToken();
     const cleanRel = relativePath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
     const folderPath = path.dirname(cleanRel);
     const fileName = path.basename(cleanRel);
-    const parentFolderId = await this.ensureFolder(folderPath === '.' ? '' : folderPath);
 
     const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
     const checksum = crypto.createHash('sha256').update(buffer).digest('hex');
 
-    // Check if file already exists in target folder
-    const q = `name = '${fileName}' and '${parentFolderId}' in parents and trashed = false`;
-    const searchRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const searchData = await searchRes.json();
-    const existingFileId = searchData.files?.[0]?.id;
+    let parentFolderId: string | undefined;
+    let existingFileId: string | null = null;
 
-    // Resumable upload for files > 5MB, multipart for smaller
-    if (buffer.length > 5 * 1024 * 1024) {
-      // Initiate resumable upload
-      const initUrl = existingFileId
-        ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=resumable`
-        : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable';
-      const initMethod = existingFileId ? 'PATCH' : 'POST';
+    // 1. Check file-id cache first to skip exists-query
+    const cached = this.driveFileCache.get(cleanRel);
+    if (cached && cached.fileId) {
+      existingFileId = cached.fileId;
+      parentFolderId = cached.parentFolderId;
+    }
 
-      const initRes = await fetch(initUrl, {
-        method: initMethod,
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json; charset=UTF-8',
-          'X-Upload-Content-Type': mimeType,
-          'X-Upload-Content-Length': String(buffer.length),
-        },
-        body: JSON.stringify(existingFileId ? {} : { name: fileName, parents: [parentFolderId] }),
-      });
+    // Helper to upload either via resumable (>5MB) or multipart (<=5MB)
+    const performUpload = async (targetFileId: string | null, parentId: string): Promise<string> => {
+      if (buffer.length > 5 * 1024 * 1024) {
+        // Resumable upload
+        const initUrl = targetFileId
+          ? `https://www.googleapis.com/upload/drive/v3/files/${targetFileId}?uploadType=resumable`
+          : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable';
+        const initMethod = targetFileId ? 'PATCH' : 'POST';
 
-      const uploadUrl = initRes.headers.get('Location');
-      if (!uploadUrl) {
-        throw new Error('Google Drive resumable upload failed to provide Location header.');
+        const initRes = await fetchWithRetry(initUrl, {
+          method: initMethod,
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json; charset=UTF-8',
+            'X-Upload-Content-Type': mimeType,
+            'X-Upload-Content-Length': String(buffer.length),
+          },
+          body: JSON.stringify(targetFileId ? {} : { name: fileName, parents: [parentId] }),
+        });
+
+        if (targetFileId && initRes.status === 404) {
+          throw new Error('DRIVE_FILE_NOT_FOUND_404');
+        }
+
+        const uploadUrl = initRes.headers.get('Location');
+        if (!uploadUrl) {
+          throw new Error('Google Drive resumable upload failed to provide Location header.');
+        }
+
+        const uploadRes = await fetchWithRetry(uploadUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Length': String(buffer.length),
+            'Content-Type': mimeType,
+          },
+          body: new Uint8Array(buffer),
+        });
+
+        const uploadJson = await uploadRes.json().catch(() => ({}));
+        return uploadJson.id || targetFileId || '';
       }
 
-      await fetch(uploadUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Length': String(buffer.length),
-          'Content-Type': mimeType,
-        },
-        body: new Uint8Array(buffer),
-      });
-    } else {
       // Multipart upload
       const boundary = '-------314159265358979323846';
       const delimiter = `\r\n--${boundary}\r\n`;
       const closeDelimiter = `\r\n--${boundary}--`;
 
-      const metadata = existingFileId
+      const metadata = targetFileId
         ? { mimeType }
-        : { name: fileName, parents: [parentFolderId], mimeType };
+        : { name: fileName, parents: [parentId], mimeType };
 
       const multipartBody = Buffer.concat([
         Buffer.from(`${delimiter}Content-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}`),
@@ -320,12 +405,12 @@ export class GoogleDriveBackupTarget implements BackupTarget {
         Buffer.from(closeDelimiter),
       ]);
 
-      const uploadUrl = existingFileId
-        ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart`
+      const uploadUrl = targetFileId
+        ? `https://www.googleapis.com/upload/drive/v3/files/${targetFileId}?uploadType=multipart`
         : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
-      const uploadMethod = existingFileId ? 'PATCH' : 'POST';
+      const uploadMethod = targetFileId ? 'PATCH' : 'POST';
 
-      const res = await fetch(uploadUrl, {
+      const res = await fetchWithRetry(uploadUrl, {
         method: uploadMethod,
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -334,11 +419,60 @@ export class GoogleDriveBackupTarget implements BackupTarget {
         body: new Uint8Array(multipartBody),
       });
 
+      if (targetFileId && res.status === 404) {
+        throw new Error('DRIVE_FILE_NOT_FOUND_404');
+      }
+
       if (!res.ok) {
         const err = await res.text().catch(() => '');
         throw new Error(`Drive file upload failed (${res.status}): ${err}`);
       }
+
+      const resJson = await res.json().catch(() => ({}));
+      return resJson.id || targetFileId || '';
+    };
+
+    let resolvedFileId = '';
+
+    if (existingFileId) {
+      try {
+        // Fast path: use cached file-id directly
+        resolvedFileId = await performUpload(existingFileId, parentFolderId || '');
+      } catch (err: any) {
+        if (err.message === 'DRIVE_FILE_NOT_FOUND_404') {
+          // On 404 or mismatch: clear entry and re-query once
+          this.driveFileCache.delete(cleanRel);
+          existingFileId = null;
+        } else {
+          throw err;
+        }
+      }
     }
+
+    if (!resolvedFileId) {
+      // Slow path: resolve parent folder and query Drive
+      if (!parentFolderId) {
+        parentFolderId = await this.ensureFolder(folderPath === '.' ? '' : folderPath);
+      }
+
+      const q = `name = '${fileName}' and '${parentFolderId}' in parents and trashed = false`;
+      const searchRes = await fetchWithRetry(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      const searchData = await searchRes.json();
+      existingFileId = searchData.files?.[0]?.id || null;
+
+      resolvedFileId = await performUpload(existingFileId, parentFolderId);
+    }
+
+    // Update cache with path/hash -> file id
+    this.driveFileCache.set(cleanRel, {
+      fileId: resolvedFileId,
+      checksum,
+      parentFolderId,
+    });
+    await this.saveCache();
 
     return {
       path: cleanRel,
@@ -354,24 +488,52 @@ export class GoogleDriveBackupTarget implements BackupTarget {
       const cleanRel = relativePath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
       const folderPath = path.dirname(cleanRel);
       const fileName = path.basename(cleanRel);
-      const parentFolderId = await this.ensureFolder(folderPath === '.' ? '' : folderPath);
 
+      let fileId: string | null = null;
+      const cached = this.driveFileCache.get(cleanRel);
+      if (cached && cached.fileId) {
+        fileId = cached.fileId;
+      }
+
+      if (fileId) {
+        const res = await fetchWithRetry(
+          `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        if (res.ok) {
+          const arrayBuf = await res.arrayBuffer();
+          return Buffer.from(arrayBuf);
+        }
+        if (res.status === 404) {
+          this.driveFileCache.delete(cleanRel);
+          fileId = null;
+        }
+      }
+
+      // Fallback: search query once
+      const parentFolderId = await this.ensureFolder(folderPath === '.' ? '' : folderPath);
       const q = `name = '${fileName}' and '${parentFolderId}' in parents and trashed = false`;
-      const searchRes = await fetch(
+      const searchRes = await fetchWithRetry(
         `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       const searchData = await searchRes.json();
-      const fileId = searchData.files?.[0]?.id;
+      fileId = searchData.files?.[0]?.id || null;
       if (!fileId) return null;
 
-      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      const res = await fetchWithRetry(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
       if (!res.ok) return null;
 
       const arrayBuf = await res.arrayBuffer();
-      return Buffer.from(arrayBuf);
+      const buf = Buffer.from(arrayBuf);
+      const checksum = crypto.createHash('sha256').update(buf).digest('hex');
+      this.driveFileCache.set(cleanRel, { fileId, checksum, parentFolderId });
+      await this.saveCache();
+
+      return buf;
     } catch {
       return null;
     }
@@ -383,7 +545,7 @@ export class GoogleDriveBackupTarget implements BackupTarget {
     const folderId = await this.ensureFolder(cleanPrefix);
 
     const q = `'${folderId}' in parents and trashed = false`;
-    const res = await fetch(
+    const res = await fetchWithRetry(
       `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,size,md5Checksum,modifiedTime,mimeType)`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );

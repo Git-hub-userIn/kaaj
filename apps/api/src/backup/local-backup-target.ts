@@ -100,6 +100,19 @@ export class LocalFolderBackupTarget implements BackupTarget {
     }
   }
 
+  async has(relativePath: string, checksum: string): Promise<boolean> {
+    const cleanRel = relativePath.replace(/^[/\\]+/, '');
+    const fullPath = path.join(this.rootDir, cleanRel);
+    try {
+      if (!fsSync.existsSync(fullPath)) return false;
+      const buf = await fs.readFile(fullPath);
+      const hash = crypto.createHash('sha256').update(buf).digest('hex');
+      return hash === checksum;
+    } catch {
+      return false;
+    }
+  }
+
   async delete(relativePath: string): Promise<void> {
     const cleanRel = relativePath.replace(/^[/\\]+/, '');
     const fullPath = path.join(this.rootDir, cleanRel);

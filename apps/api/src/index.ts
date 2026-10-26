@@ -51,12 +51,14 @@ const categoriesService = new CategoriesService(baseDataDir, assetStore, seedCov
 
 const defaultBackupDir = process.env.BACKUP_DIR || path.resolve(repoRoot, 'data', 'backup-snapshots');
 const tokenFilePath = process.env.GOOGLE_TOKEN_FILE || path.resolve(baseDataDir, 'google-oauth.json');
+const cacheFilePath = process.env.GOOGLE_DRIVE_CACHE_FILE || path.resolve(baseDataDir, 'drive-file-cache.json');
 
 const googleDriveTarget = new GoogleDriveBackupTarget({
   clientId: process.env.GOOGLE_CLIENT_ID,
   clientSecret: process.env.GOOGLE_CLIENT_SECRET,
   redirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3001/auth/google/callback',
   tokenFilePath,
+  cacheFilePath,
 });
 
 const localBackupTarget = new LocalFolderBackupTarget(defaultBackupDir);
@@ -478,7 +480,6 @@ app.post('/backup/trigger', async (c) => {
     if (backupService.getStatus().status === 'running') {
       return c.json({
         error: 'A backup snapshot is already in progress.',
-        status: 'running',
         ...backupService.getStatus(),
       }, 409);
     }

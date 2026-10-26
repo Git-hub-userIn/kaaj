@@ -344,3 +344,27 @@ flowchart TD
 2. **Google Drive Authentication (LOCKED):** User OAuth2 flow with refresh tokens and narrow scope `drive.file`. Google Cloud project must be configured as "In Production" to avoid the 7-day refresh token expiration limit.
 3. **Backup Policy (LOCKED):** Periodic every 15 minutes (only if content modified), on entry close, and manual user trigger.
 4. **Chunk Size Thresholds (DEFAULT):** 50 blocks / 64 KB default split boundary. Tuned in Step 3.
+
+---
+
+## 9. Future Option: Pack-per-Entry Archive Storage (Evaluated, Not Implemented)
+
+We evaluated an entry-level pack archive format for remote backups.
+
+### 9.1 Design Concept
+- Combine all chunk files for a single entry into one concatenated pack file.
+- Enforce a strict boundary cap: maximum 5 MB or 200 chunks per pack file.
+- When an entry exceeds 200 chunks or 5 MB, create sequential packs (`pack_001.bin`, `pack_002.bin`).
+
+### 9.2 Trade-Off Analysis
+- **Advantages:**
+  - Decreases sequential HTTPS round trips to Google Drive by 50x to 100x during initial full snapshots.
+  - Reduces total file object count in cloud storage directories.
+- **Disadvantages:**
+  - Increases write amplification. Modifying a single block requires re-uploading the entire entry pack file instead of one isolated 64 KB chunk.
+  - Complicates incremental diffing and partial restore operations.
+  - Requires extra archive packing, unpacking, and verification logic on client and server.
+
+### 9.3 Milestone Decision
+Do not implement pack files in the current release. Bounded concurrency (pool size 4) and persistent Drive file-id caching resolve initial snapshot latency without pack file complexity. Keep this design as an evaluation option for vaults exceeding 5,000 entries.
+

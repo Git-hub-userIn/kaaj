@@ -31,6 +31,31 @@ export interface BackupStatus {
   lastSnapshotId: string | null;
   uploadedCount: number;
   totalFiles?: number;
+  processedCount?: number;
+}
+
+/**
+ * Executes async tasks with bounded concurrency pool.
+ */
+export async function runConcurrent<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const idx = nextIndex++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  };
+
+  const poolSize = Math.max(1, Math.min(limit, items.length));
+  const workers = Array.from({ length: poolSize }, () => worker());
+  await Promise.all(workers);
+  return results;
 }
 
 export class BackupService {
@@ -42,6 +67,7 @@ export class BackupService {
     lastError: null,
     lastSnapshotId: null,
     uploadedCount: 0,
+    processedCount: 0,
   };
   private intervalTimer: NodeJS.Timeout | null = null;
   private lastDataHash: string | null = null;
@@ -102,8 +128,13 @@ export class BackupService {
   /**
    * Core snapshot creation method.
    * Incremental: uploads only chunks/assets whose hash changed since previous snapshot.
+   * Bounded concurrency: default 4 (configurable via BACKUP_CONCURRENCY).
+   * Ordering rule: latest-manifest.json updated only after ALL uploads succeed.
    */
-  async createSnapshot(options?: { forceAll?: boolean }): Promise<{
+  async createSnapshot(options?: {
+    forceAll?: boolean;
+    concurrency?: number;
+  }): Promise<{
     snapshotId: string;
     uploadedCount: number;
     skippedCount: number;
@@ -165,7 +196,10 @@ export class BackupService {
               const chks = await fs.readdir(chkDir, { withFileTypes: true });
               for (const chk of chks) {
                 if (chk.isFile() && chk.name.endsWith('.json')) {
-                  localFiles.push({ relPath: `entries/${entId}/chunks/${chk.name}`, fullPath: path.join(chkDir, chk.name) });
+                  localFiles.push({
+                    relPath: `entries/${entId}/chunks/${chk.name}`,
+                    fullPath: path.join(chkDir, chk.name),
+                  });
                 }
               }
             }
@@ -193,44 +227,57 @@ export class BackupService {
         }
       }
 
-      // 3. Process each file: compute checksum, upload if changed
+      // 3. Process each file with bounded concurrency
+      const concurrency = Math.max(
+        1,
+        options?.concurrency ?? (Number(process.env.BACKUP_CONCURRENCY) || 4)
+      );
+
       this.status.totalFiles = localFiles.length;
       this.status.uploadedCount = 0;
+      this.status.processedCount = 0;
 
       let uploadedCount = 0;
       let skippedCount = 0;
+      let processedCount = 0;
       let totalBytes = 0;
-      const manifestFileEntries: SnapshotFileEntry[] = [];
+      const manifestFileEntries: SnapshotFileEntry[] = new Array(localFiles.length);
 
       let entryCount = 0;
       let chunkCount = 0;
       let assetCount = 0;
 
-      for (const item of localFiles) {
+      await runConcurrent(localFiles, concurrency, async (item, index) => {
         const buffer = await fs.readFile(item.fullPath);
         const checksum = crypto.createHash('sha256').update(buffer).digest('hex');
-        totalBytes += buffer.length;
 
+        manifestFileEntries[index] = {
+          path: item.relPath,
+          bytes: buffer.length,
+          checksum,
+        };
+
+        totalBytes += buffer.length;
         if (item.relPath.includes('entries/') && item.relPath.endsWith('manifest.json')) entryCount++;
         if (item.relPath.includes('chunks/')) chunkCount++;
         if (item.relPath.startsWith('assets/')) assetCount++;
 
-        manifestFileEntries.push({
-          path: item.relPath,
-          bytes: buffer.length,
-          checksum,
-        });
-
-        // Check if hash matches previous snapshot
+        // Incremental check:
+        // 1. Matches previous snapshot manifest
+        // 2. Or already landed on target (e.g. after interrupted run)
         if (prevMap.get(item.relPath) === checksum) {
           skippedCount++;
+        } else if (this.target.has && (await this.target.has(item.relPath, checksum))) {
+          skippedCount++;
         } else {
-          // Upload changed file
           await this.target.put(item.relPath, buffer);
           uploadedCount++;
           this.status.uploadedCount = uploadedCount;
         }
-      }
+
+        processedCount++;
+        this.status.processedCount = processedCount;
+      });
 
       // 4. Create and upload Snapshot Manifest
       const snapshotManifest: SnapshotManifest = {
@@ -249,7 +296,7 @@ export class BackupService {
 
       const manifestBuf = Buffer.from(JSON.stringify(snapshotManifest, null, 2), 'utf8');
 
-      // Save historical snapshot manifest and update latest-manifest.json
+      // Ordering rule: Update historical snapshot and latest-manifest strictly after all uploads succeed
       await this.target.put(`snapshots/${snapshotId}/manifest.json`, manifestBuf, 'application/json');
       await this.target.put('snapshots/latest-manifest.json', manifestBuf, 'application/json');
 
@@ -257,6 +304,7 @@ export class BackupService {
       this.status.lastBackupTime = snapshotManifest.createdAt;
       this.status.lastSnapshotId = snapshotId;
       this.status.uploadedCount = uploadedCount;
+      this.status.processedCount = processedCount;
       this.lastDataHash = await this.computeQuickDataHash();
 
       return {

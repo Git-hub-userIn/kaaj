@@ -4,11 +4,12 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { BackupTarget } from '../apps/api/src/backup/backup-target.js';
 import { LocalFolderBackupTarget } from '../apps/api/src/backup/local-backup-target.js';
-import type { SnapshotManifest } from '../apps/api/src/backup/backup-service.js';
+import { type SnapshotManifest, runConcurrent } from '../apps/api/src/backup/backup-service.js';
 
 export interface RestoreOptions {
   snapshotId?: string; // Default: 'latest'
   force?: boolean;
+  concurrency?: number; // Default: BACKUP_CONCURRENCY env or 4
 }
 
 export interface RestoreResult {
@@ -19,6 +20,7 @@ export interface RestoreResult {
 
 /**
  * Restores a snapshot into a clean target directory and verifies content checksums.
+ * Uses bounded concurrency (default 4, configurable via env BACKUP_CONCURRENCY).
  * Never overwrites non-empty directory without explicit force flag.
  */
 export async function restoreSnapshot(
@@ -28,6 +30,10 @@ export async function restoreSnapshot(
 ): Promise<RestoreResult> {
   const force = options?.force ?? false;
   const snapshotId = options?.snapshotId ?? 'latest';
+  const concurrency = Math.max(
+    1,
+    options?.concurrency ?? (Number(process.env.BACKUP_CONCURRENCY) || 4)
+  );
 
   // 1. Validate destination directory is clean
   if (fsSync.existsSync(destinationDir)) {
@@ -43,9 +49,10 @@ export async function restoreSnapshot(
   }
 
   // 2. Fetch snapshot manifest
-  const manifestPath = snapshotId === 'latest'
-    ? 'snapshots/latest-manifest.json'
-    : `snapshots/${snapshotId}/manifest.json`;
+  const manifestPath =
+    snapshotId === 'latest'
+      ? 'snapshots/latest-manifest.json'
+      : `snapshots/${snapshotId}/manifest.json`;
 
   const rawManifest = await target.get(manifestPath);
   if (!rawManifest) {
@@ -56,8 +63,8 @@ export async function restoreSnapshot(
   let restoredCount = 0;
   let totalBytes = 0;
 
-  // 3. Download and verify each file
-  for (const item of manifest.files) {
+  // 3. Download and verify each file with bounded concurrency
+  await runConcurrent(manifest.files, concurrency, async (item) => {
     const fileData = await target.get(item.path);
     if (!fileData) {
       throw new Error(`File missing on backup target: ${item.path}`);
@@ -86,7 +93,7 @@ export async function restoreSnapshot(
 
     restoredCount++;
     totalBytes += fileData.length;
-  }
+  });
 
   return {
     restoredFiles: restoredCount,
@@ -96,17 +103,28 @@ export async function restoreSnapshot(
 }
 
 // CLI Runner
-if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` || process.argv[1]?.includes('restore-snapshot')) {
+if (
+  import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` ||
+  process.argv[1]?.includes('restore-snapshot')
+) {
   const args = process.argv.slice(2);
   const force = args.includes('--force') || args.includes('-f');
+  const concurrencyArg = args.find((a) => a.startsWith('--concurrency='));
+  const concurrency = concurrencyArg ? Number(concurrencyArg.split('=')[1]) : undefined;
   const backupSource = args.find((a) => !a.startsWith('-') && !a.includes('=')) || 'data/backups/snapshots';
   const destDir = args[args.indexOf(backupSource) + 1] || 'data/restored-data';
 
-  console.log(`[RESTORE] Source: ${backupSource} | Destination: ${destDir} | Force: ${force}`);
+  console.log(
+    `[RESTORE] Source: ${backupSource} | Destination: ${destDir} | Force: ${force} | Concurrency: ${
+      concurrency || process.env.BACKUP_CONCURRENCY || 4
+    }`
+  );
   const target = new LocalFolderBackupTarget(path.resolve(backupSource));
-  restoreSnapshot(target, path.resolve(destDir), { force })
+  restoreSnapshot(target, path.resolve(destDir), { force, concurrency })
     .then((res) => {
-      console.log(`[RESTORE COMPLETED] Restored ${res.restoredFiles} files (${res.totalBytes} bytes) from snapshot ${res.snapshotId}.`);
+      console.log(
+        `[RESTORE COMPLETED] Restored ${res.restoredFiles} files (${res.totalBytes} bytes) from snapshot ${res.snapshotId}.`
+      );
     })
     .catch((err) => {
       console.error(`[RESTORE FAILED] ${err.message}`);

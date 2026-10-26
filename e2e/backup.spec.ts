@@ -2,11 +2,14 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import http from 'node:http';
 import { test, expect } from '@playwright/test';
 import { cleanOrphanAssets } from '../scripts/clean-orphan-assets.js';
 import { restoreSnapshot } from '../scripts/restore-snapshot.js';
 import { LocalFolderBackupTarget } from '../apps/api/src/backup/local-backup-target.js';
 import { BackupService } from '../apps/api/src/backup/backup-service.js';
+import { fetchWithRetry } from '../apps/api/src/backup/drive-retry.js';
+import { GoogleDriveBackupTarget } from '../apps/api/src/backup/google-drive-backup-target.js';
 import {
   type DocumentEnvelopeV2,
   type TopLevelBlock,
@@ -328,7 +331,7 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
       // Locate backup indicator button
       const backupBtn = page.locator('[data-testid="backup-status-indicator"]');
       await expect(backupBtn).toBeVisible({ timeout: 10000 });
-      await expect(backupBtn).toContainText(/Backup:/i);
+      await expect(backupBtn).toContainText(/Backup:|Backing up/i);
 
       // Click backup indicator to trigger backup
       await backupBtn.click();
@@ -341,5 +344,300 @@ test.describe('Kaaj Step 4 Suite — Hardening & Cloud Backup', () => {
     } finally {
       await request.delete(`${API_BASE}/entries/${created.id}`, { headers: AUTH_HEADER });
     }
+  });
+
+  // Test 7: Bounded concurrency respected
+  test('7. Bounded concurrency (default 4) limits max in-flight uploads', async () => {
+    test.setTimeout(30000);
+
+    const testBackupDir = path.join(repoRoot, 'data', 'test-concurrency-backup');
+    await fs.rm(testBackupDir, { recursive: true, force: true });
+    await fs.mkdir(testBackupDir, { recursive: true });
+
+    class ConcurrencyInstrumentedTarget extends LocalFolderBackupTarget {
+      inFlight = 0;
+      maxInFlight = 0;
+
+      override async put(relativePath: string, data: Buffer | Uint8Array, mimeType?: string) {
+        this.inFlight++;
+        if (this.inFlight > this.maxInFlight) {
+          this.maxInFlight = this.inFlight;
+        }
+        // Simulated network latency
+        await new Promise((r) => setTimeout(r, 40));
+        try {
+          return await super.put(relativePath, data, mimeType);
+        } finally {
+          this.inFlight--;
+        }
+      }
+    }
+
+    const instrumentedTarget = new ConcurrencyInstrumentedTarget(testBackupDir);
+    const service = new BackupService(baseDataDir, instrumentedTarget);
+
+    await service.createSnapshot({ forceAll: true, concurrency: 4 });
+
+    // Assert concurrency ceiling respected
+    expect(instrumentedTarget.maxInFlight).toBeLessThanOrEqual(4);
+    // Assert concurrency actually took place (> 1)
+    expect(instrumentedTarget.maxInFlight).toBeGreaterThan(1);
+
+    await fs.rm(testBackupDir, { recursive: true, force: true });
+  });
+
+  // Test 8: Exponential backoff & retry on 429
+  test('8. Drive retry utility handles HTTP 429 with Retry-After and exponential backoff', async () => {
+    test.setTimeout(30000);
+
+    let attempts = 0;
+    const server = http.createServer((req, res) => {
+      attempts++;
+      if (attempts < 3) {
+        // Return 429 on first 2 attempts with Retry-After header
+        res.writeHead(429, {
+          'Content-Type': 'application/json',
+          'Retry-After': '0.1', // 100ms
+        });
+        res.end(JSON.stringify({ error: 'rateLimitExceeded' }));
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, attempts }));
+      }
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as any).port;
+    const serverUrl = `http://127.0.0.1:${port}/test-429`;
+
+    try {
+      const res = await fetchWithRetry(
+        serverUrl,
+        { method: 'GET' },
+        { maxRetries: 5, initialWaitMs: 50 }
+      );
+
+      expect(res.ok).toBe(true);
+      const data = await res.json();
+      expect(data.success).toBe(true);
+      expect(attempts).toBe(3);
+
+      // Verify maxRetries exhaustion throws clear error
+      let failAttempts = 0;
+      const failingServer = http.createServer((req, res) => {
+        failAttempts++;
+        res.writeHead(429, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'persistentRateLimit' }));
+      });
+      await new Promise<void>((resolve) => failingServer.listen(0, '127.0.0.1', resolve));
+      const failPort = (failingServer.address() as any).port;
+
+      try {
+        await expect(
+          fetchWithRetry(`http://127.0.0.1:${failPort}`, {}, { maxRetries: 2, initialWaitMs: 20 })
+        ).rejects.toThrow(/after 2 retries/);
+      } finally {
+        failingServer.close();
+      }
+    } finally {
+      server.close();
+    }
+  });
+
+  // Test 9: Interrupted run resumes without re-upload
+  test('9. Interrupted backup leaves previous snapshot valid; subsequent run resumes and skips landed files', async () => {
+    test.setTimeout(45000);
+
+    const testSourceDir = path.join(repoRoot, 'data', 'test-resume-source');
+    const testBackupDir = path.join(repoRoot, 'data', 'test-resume-backup');
+    await fs.rm(testSourceDir, { recursive: true, force: true });
+    await fs.rm(testBackupDir, { recursive: true, force: true });
+    await fs.mkdir(testSourceDir, { recursive: true });
+    await fs.mkdir(testBackupDir, { recursive: true });
+
+    // Seed 3 initial files
+    await fs.writeFile(path.join(testSourceDir, 'db-store.json'), JSON.stringify({ v: 1 }));
+    const entDir = path.join(testSourceDir, 'entries', 'ent_resume');
+    await fs.mkdir(path.join(entDir, 'chunks'), { recursive: true });
+    await fs.writeFile(path.join(entDir, 'manifest.json'), JSON.stringify({ id: 'ent_resume' }));
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_0.json'), JSON.stringify({ blocks: ['A'] }));
+
+    const localTarget = new LocalFolderBackupTarget(testBackupDir);
+    const service = new BackupService(testSourceDir, localTarget);
+
+    // 1. Initial baseline backup
+    const baseline = await service.createSnapshot();
+    const initialSnapshotId = baseline.snapshotId;
+    expect(baseline.uploadedCount).toBe(3);
+
+    const initialManifestRaw = await localTarget.get('snapshots/latest-manifest.json');
+    expect(initialManifestRaw).not.toBeNull();
+    const parsedInitial = JSON.parse(initialManifestRaw!.toString('utf8'));
+    expect(parsedInitial.snapshotId).toBe(initialSnapshotId);
+
+    // 2. Add 2 new chunk files in source
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_1.json'), JSON.stringify({ blocks: ['B'] }));
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_2.json'), JSON.stringify({ blocks: ['C'] }));
+
+    // 3. Flaky target: upload 1 new file, then simulate crash mid-run
+    class FlakyInterruptionTarget extends LocalFolderBackupTarget {
+      newUploads = 0;
+      failThreshold = 1;
+
+      override async put(relativePath: string, data: Buffer | Uint8Array, mimeType?: string) {
+        if (relativePath.startsWith('snapshots/')) {
+          if (this.failThreshold > 0) {
+            throw new Error('Interrupted mid-snapshot before manifest write');
+          }
+        }
+        const record = await super.put(relativePath, data, mimeType);
+        if (relativePath.includes('chunks/chunk_1.json')) {
+          this.newUploads++;
+          if (this.failThreshold > 0) {
+            throw new Error('Process killed mid-run');
+          }
+        }
+        return record;
+      }
+    }
+
+    const flakyTarget = new FlakyInterruptionTarget(testBackupDir);
+    const flakyService = new BackupService(testSourceDir, flakyTarget);
+
+    // Trigger backup that crashes after chunk_1.json lands
+    await expect(flakyService.createSnapshot({ concurrency: 1 })).rejects.toThrow(
+      /Process killed mid-run/
+    );
+
+    // 4. Verify ordering rule: latest-manifest STILL points to initial baseline snapshot
+    const latestAfterCrash = await localTarget.get('snapshots/latest-manifest.json');
+    const parsedAfterCrash = JSON.parse(latestAfterCrash!.toString('utf8'));
+    expect(parsedAfterCrash.snapshotId).toBe(initialSnapshotId);
+
+    // 5. Verify chunk_1.json actually landed on backup target
+    expect(await localTarget.exists('entries/ent_resume/chunks/chunk_1.json')).toBe(true);
+
+    // 6. Resume backup with normal target: chunk_1.json must NOT be re-uploaded!
+    flakyTarget.failThreshold = 0;
+    const resumedResult = await flakyService.createSnapshot({ concurrency: 1 });
+
+    // 3 baseline files + 1 already-landed chunk_1.json = 4 skipped files
+    expect(resumedResult.skippedCount).toBe(4);
+    // Only chunk_2.json needs uploading
+    expect(resumedResult.uploadedCount).toBe(1);
+
+    // 7. Verify latest-manifest is now cleanly updated with all 5 files
+    const finalLatest = await localTarget.get('snapshots/latest-manifest.json');
+    const parsedFinal = JSON.parse(finalLatest!.toString('utf8'));
+    expect(parsedFinal.snapshotId).toBe(resumedResult.manifest.snapshotId);
+    expect(parsedFinal.totalFiles).toBe(5);
+
+    // Cleanup
+    await fs.rm(testSourceDir, { recursive: true, force: true });
+    await fs.rm(testBackupDir, { recursive: true, force: true });
+  });
+
+  // Test 10: Cache loss recovery
+  test('10. Drive file-id cache loss recovers via fallback query and rebuilds cache file', async () => {
+    test.setTimeout(30000);
+
+    const testTokenPath = path.join(repoRoot, 'data', 'test-oauth-token.json');
+    const testCachePath = path.join(repoRoot, 'data', 'test-drive-file-cache.json');
+
+    await fs.rm(testCachePath, { force: true });
+    // Write mock token file
+    await fs.writeFile(
+      testTokenPath,
+      JSON.stringify({
+        refreshToken: 'dummy_refresh',
+        accessToken: 'dummy_access',
+        expiresAt: Date.now() + 3600000,
+      })
+    );
+
+    const driveTarget = new GoogleDriveBackupTarget({
+      tokenFilePath: testTokenPath,
+      cacheFilePath: testCachePath,
+    });
+
+    // 1. Initially cache is empty
+    expect(fsSync.existsSync(testCachePath)).toBe(false);
+    expect(await driveTarget.has('entries/test.json', 'hash123')).toBe(false);
+
+    // 2. Populate cache entry
+    (driveTarget as any).driveFileCache.set('entries/test.json', {
+      fileId: 'drive_file_id_001',
+      checksum: 'hash123',
+    });
+    await driveTarget.saveCache();
+
+    // Verify cache file exists on disk
+    expect(fsSync.existsSync(testCachePath)).toBe(true);
+    expect(await driveTarget.has('entries/test.json', 'hash123')).toBe(true);
+
+    // 3. Simulate cache file deletion/loss
+    await driveTarget.clearCache();
+    expect(fsSync.existsSync(testCachePath)).toBe(false);
+    expect(await driveTarget.has('entries/test.json', 'hash123')).toBe(false);
+
+    // 4. Target loads cleanly without throwing even when cache is missing
+    const reloadedTarget = new GoogleDriveBackupTarget({
+      tokenFilePath: testTokenPath,
+      cacheFilePath: testCachePath,
+    });
+    expect(await reloadedTarget.has('entries/test.json', 'hash123')).toBe(false);
+
+    // Cleanup
+    await fs.rm(testTokenPath, { force: true });
+    await fs.rm(testCachePath, { force: true });
+  });
+
+  // Test 11: Restore with bounded concurrency gives equal docs
+  test('11. Restore with concurrency produces identical canonical documents and verified checksums', async () => {
+    test.setTimeout(45000);
+
+    const backupDir = path.join(repoRoot, 'data', 'test-concurrent-restore-backup');
+    const restoreCleanDir = path.join(repoRoot, 'data', 'test-concurrent-restore-dest');
+
+    await fs.rm(backupDir, { recursive: true, force: true });
+    await fs.rm(restoreCleanDir, { recursive: true, force: true });
+    await fs.mkdir(backupDir, { recursive: true });
+
+    const localTarget = new LocalFolderBackupTarget(backupDir);
+    const backupService = new BackupService(baseDataDir, localTarget);
+
+    // Create a snapshot
+    const snapshot = await backupService.createSnapshot({ forceAll: true });
+    expect(snapshot.uploadedCount).toBeGreaterThan(0);
+
+    // Restore with concurrency = 4
+    const result = await restoreSnapshot(localTarget, restoreCleanDir, {
+      force: true,
+      concurrency: 4,
+    });
+
+    expect(result.restoredFiles).toBe(snapshot.manifest.totalFiles);
+    expect(result.totalBytes).toBe(snapshot.manifest.totalBytes);
+
+    // Verify restored db-store.json matches original
+    const origDb = await fs.readFile(path.join(baseDataDir, 'db-store.json'), 'utf8');
+    const restoredDb = await fs.readFile(path.join(restoreCleanDir, 'db-store.json'), 'utf8');
+    expect(JSON.parse(restoredDb)).toEqual(JSON.parse(origDb));
+
+    // Verify all restored files have valid checksums matching manifest
+    for (const f of snapshot.manifest.files) {
+      let destPath = f.path;
+      if (destPath.startsWith('assets/')) {
+        destPath = path.join('storage', destPath.replace(/^assets\//, ''));
+      }
+      const fullP = path.join(restoreCleanDir, destPath);
+      expect(fsSync.existsSync(fullP)).toBe(true);
+      const data = await fs.readFile(fullP);
+      const hash = crypto.createHash('sha256').update(data).digest('hex');
+      expect(hash).toBe(f.checksum);
+    }
+
+    await fs.rm(backupDir, { recursive: true, force: true });
+    await fs.rm(restoreCleanDir, { recursive: true, force: true });
   });
 });

@@ -105,7 +105,13 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         const data = await res.json();
         setBackupStatus(data.status);
         if (data.status === 'running') {
-          setBackupStatusText('Backing up...');
+          const current = data.processedCount ?? data.uploadedCount ?? 0;
+          const total = data.totalFiles;
+          if (total) {
+            setBackupStatusText(`Backing up ${current}/${total}`);
+          } else {
+            setBackupStatusText('Backing up...');
+          }
         } else if (data.status === 'failed') {
           setBackupStatusText('Backup failed · Retry');
         } else if (data.lastBackupTime) {
@@ -152,6 +158,18 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       }).catch(() => {});
     };
   }, [fetchBackupStatus]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    if (backupStatus === 'running') {
+      timer = setTimeout(() => {
+        fetchBackupStatus();
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [backupStatus, fetchBackupStatus]);
 
   // Refs for autosave orchestration
   const entryRef = useRef<LoadedEntry | null>(null);

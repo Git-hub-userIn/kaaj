@@ -12,4 +12,5 @@ export interface BackupTarget {
   list(prefix?: string): Promise<BackupFileRecord[]>;
   delete?(relativePath: string): Promise<void>;
   exists?(relativePath: string): Promise<boolean>;
+  has?(relativePath: string, checksum: string): Promise<boolean>;
 }
