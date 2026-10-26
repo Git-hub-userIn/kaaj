@@ -4,6 +4,11 @@
 Write-Host "[kaaj] Starting API (http://localhost:3001) and Web UI (http://localhost:3000)..." -ForegroundColor Cyan
 Write-Host "[kaaj] Press Ctrl+C to stop both servers." -ForegroundColor Gray
 
+# Proactively clean up any lingering processes on ports 3000 and 3001
+Get-NetTCPConnection -LocalPort 3000, 3001 -ErrorAction SilentlyContinue | ForEach-Object {
+    taskkill /F /PID $_.OwningProcess 2>$null
+}
+
 $api = Start-Process bun -ArgumentList "run", "--filter", "@kaaj/api", "dev" -PassThru -NoNewWindow
 $web = Start-Process bun -ArgumentList "run", "--filter", "@kaaj/web", "dev" -PassThru -NoNewWindow
 
