@@ -266,6 +266,18 @@ export const EditorOrderedListNodeSchema: z.ZodType<EditorOrderedListNode> = z.l
   })
 );
 
+export const EditorImageNodeSchema = z.object({
+  type: z.literal('image'),
+  attrs: z.object({
+    id: z.string().nullable().optional(),
+    assetId: z.string().min(1),
+    alt: z.string().nullable().optional().default(''),
+    width: z.number().min(0.1).max(1.0).optional().default(1.0),
+  }).passthrough(),
+});
+
+export type EditorImageNode = z.infer<typeof EditorImageNodeSchema>;
+
 export const TopLevelBlockSchema = z.union([
   EditorParagraphNodeSchema,
   EditorHeadingNodeSchema,
@@ -273,6 +285,7 @@ export const TopLevelBlockSchema = z.union([
   EditorOrderedListNodeSchema,
   EditorBlockquoteNodeSchema,
   EditorHorizontalRuleNodeSchema,
+  EditorImageNodeSchema,
 ]);
 
 export const ProseMirrorDocSchema = z.object({
@@ -611,8 +624,12 @@ export function calculateWeight(envelope: unknown): number {
   // Schema version 2
   if (anyDoc.schemaVersion === 2 && anyDoc.doc) {
     let charCount = 0;
+    let imageCount = 0;
     const walk = (node: any) => {
       if (!node || typeof node !== 'object') return;
+      if (node.type === 'image') {
+        imageCount += 1;
+      }
       if (node.type === 'text' && typeof node.text === 'string') {
         charCount += node.text.length;
       }
@@ -623,7 +640,7 @@ export function calculateWeight(envelope: unknown): number {
       }
     };
     walk(anyDoc.doc);
-    return Math.max(1, Math.floor(charCount / 100));
+    return Math.max(1, Math.floor(charCount / 100) + imageCount * 10);
   }
 
   // Fallback for v1 pages
@@ -670,8 +687,12 @@ export function calculateEntryStats(envelope: unknown): EntryStats {
 
   if (anyDoc.schemaVersion === 2 && anyDoc.doc) {
     let words = 0;
+    let images = 0;
     const walk = (node: any) => {
       if (!node || typeof node !== 'object') return;
+      if (node.type === 'image') {
+        images += 1;
+      }
       if (node.type === 'text' && typeof node.text === 'string' && node.text.trim().length > 0) {
         const matches = node.text.trim().match(/\S+/g);
         if (matches) words += matches.length;
@@ -683,7 +704,7 @@ export function calculateEntryStats(envelope: unknown): EntryStats {
       }
     };
     walk(anyDoc.doc);
-    return { words, images: 0 };
+    return { words, images };
   }
 
   // Fallback for v1 pages

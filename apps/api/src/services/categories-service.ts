@@ -871,7 +871,9 @@ export class CategoriesService {
       categories: Array.from(this.categories.values()),
       entries: Array.from(this.entries.values()),
     };
-    await fs.writeFile(this.dataFilePath, JSON.stringify(data, null, 2), 'utf8');
+    const tmpPath = `${this.dataFilePath}.tmp`;
+    await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8');
+    await fs.rename(tmpPath, this.dataFilePath);
   }
 
   private async seed(): Promise<void> {

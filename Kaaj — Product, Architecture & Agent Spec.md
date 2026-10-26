@@ -100,8 +100,10 @@ Read-only share links per entry (token-based). Ownership via the auth seam. Full
 | Server Runtime | Node and Bun compatible Hono API | DEFAULT |
 | Testing | End-to-end only via Playwright. No unit tests | LOCKED |
 | PDF Export | Headless Chromium via Playwright | DEFAULT |
-| Vault Path | User-configured directory or app data folder | OPEN |
-| Drive Auth Flow | OAuth2 user consent vs Service Account | OPEN |
+| Vault Architecture | OPFS in browser (IndexedDB fallback), OS app-data folder in wrappers later. One VaultStore interface | LOCKED |
+| Google Drive Auth | User OAuth2, refresh token, narrow scope (`drive.file`). Set to Production mode to avoid 7-day token expiry | LOCKED |
+| Backup Policy | Periodic (15 min, only if changed) + on entry close + manual | LOCKED |
+| Chunks | 50 blocks / 64 KB split boundary | DEFAULT |
 
 ## 4. Tech stack
 
@@ -334,9 +336,9 @@ kaaj/
 - Perform backups before schema migrations.
 - Failed operations must never corrupt existing documents.
 
-## 17. Open items
+## 17. Resolved Decisions (LOCKED)
 
-1. **Local Vault Location:** Default path for local vault on desktop and mobile platforms.
-2. **Google Drive Authentication Flow:** OAuth2 user login with refresh tokens versus automated service account.
-3. **Chunk Threshold:** Exact boundary for splitting chunks (50 blocks vs 100 blocks, or byte threshold).
-4. **Drive Backup Frequency:** Trigger backup on every save, on sync state change, or on timer (e.g. every 15 minutes).
+1. **Vault Architecture:** OPFS in browser (with IndexedDB fallback). OS application data folder in native wrappers later. Unified `VaultStore` interface.
+2. **Google Drive Auth Flow:** User OAuth2 flow with refresh token. Narrow scope (`https://www.googleapis.com/auth/drive.file`). Note on testing mode: Google Cloud projects in "Testing" mode expire refresh tokens after 7 days; project must be switched to "In Production" status.
+3. **Backup Policy:** Periodic (every 15 minutes, only if content changed), on entry close, and manual user trigger.
+4. **Chunk Size Thresholds:** DEFAULT 50 blocks / 64 KB split boundary. To be tuned in Step 3.

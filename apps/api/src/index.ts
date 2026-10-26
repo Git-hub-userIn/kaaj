@@ -42,14 +42,11 @@ const seedCoversDir = path.resolve(repoRoot, 'packages', 'design', 'assets', 'se
 const assetStore = new LocalDiskAssetStore(storageDir);
 const categoriesService = new CategoriesService(baseDataDir, assetStore, seedCoversDir);
 
-// In-memory / local mock store for Phase 0 spike entry documents
-const entryStore = new Map<string, { doc: unknown; version: number; weight: number }>();
-
 app.get('/health', (c) => {
   const bunGlobal = (globalThis as unknown as { Bun?: { version: string } }).Bun;
   return c.json({
     status: 'ok',
-    phase: 'Phase 0 Spike',
+    phase: 'Phase 1 & 2',
     runtime: bunGlobal ? `Bun ${bunGlobal.version}` : `Node ${process.version}`,
     timestamp: new Date().toISOString(),
   });
@@ -153,16 +150,6 @@ app.get('/entries/:id', async (c) => {
   const entry = await categoriesService.getEntry(id);
 
   if (!entry) {
-    // Check fallback for spike in-memory store
-    const spike = entryStore.get(id);
-    if (spike) {
-      return c.json({
-        id,
-        version: spike.version,
-        weight: spike.weight,
-        doc: spike.doc,
-      });
-    }
     return c.json({ error: 'Entry not found' }, 404);
   }
 
@@ -270,44 +257,24 @@ app.put('/entries/:id', async (c) => {
   const title = typeof body.title === 'string' ? body.title : undefined;
 
   const existing = await categoriesService.getEntry(id);
-  if (existing) {
-    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
-      return c.json({ error: 'Version conflict', currentVersion: existing.version }, 409);
-    }
-    const result = await categoriesService.saveEntryDoc(id, docToSave, expectedVersion, title);
-    if ('conflict' in result) {
-      return c.json({ error: 'Version conflict', currentVersion: result.currentVersion }, 409);
-    }
-    c.header('ETag', `"${result.entry.version}"`);
-    return c.json({
-      id: result.entry.id,
-      title: result.entry.title,
-      version: result.entry.version,
-      weight: result.entry.weight,
-      stats: result.entry.stats,
-      saved: true,
-    });
+  if (!existing) {
+    return c.json({ error: 'Entry not found' }, 404);
   }
 
-  const current = entryStore.get(id);
-  const currentVersion = current?.version ?? 0;
-  if (expectedVersion !== undefined && currentVersion !== expectedVersion) {
-    return c.json({ error: 'Version conflict', currentVersion }, 409);
+  if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+    return c.json({ error: 'Version conflict', currentVersion: existing.version }, 409);
   }
-  const nextVersion = currentVersion + 1;
-  const weightVal = calculateWeight(docToSave);
-
-  entryStore.set(id, {
-    doc: docToSave,
-    version: nextVersion,
-    weight: weightVal,
-  });
-
+  const result = await categoriesService.saveEntryDoc(id, docToSave, expectedVersion, title);
+  if ('conflict' in result) {
+    return c.json({ error: 'Version conflict', currentVersion: result.currentVersion }, 409);
+  }
+  c.header('ETag', `"${result.entry.version}"`);
   return c.json({
-    id,
-    version: nextVersion,
-    weight: weightVal,
-    stats: calculateEntryStats(docToSave),
+    id: result.entry.id,
+    title: result.entry.title,
+    version: result.entry.version,
+    weight: result.entry.weight,
+    stats: result.entry.stats,
     saved: true,
   });
 });

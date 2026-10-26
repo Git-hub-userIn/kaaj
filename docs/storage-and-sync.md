@@ -155,10 +155,26 @@ The local vault provides fast disk lookup and full offline capability.
 
 ---
 
-## 4. Google Drive Layout
+## 4. Google Drive Layout and OAuth2 Protocol
 
 Google Drive holds bulk binary storage and complete system backups.
 Drive storage safeguards content against local disk failure or Render database recreation.
+
+### 4.1 OAuth2 Refresh Token Expiry Rules (Official Google Documentation)
+
+Google OAuth 2.0 enforces specific refresh token lifetimes:
+- **Testing Publishing Status (7-Day Expiry):** When a Google Cloud project has an OAuth consent screen set to **External** with publishing status **Testing**, refresh tokens expire automatically after **7 days**. When expired, calls fail with HTTP 400 `invalid_grant: Token has been expired or revoked`.
+- **Production Publishing Status (Long-Lived):** To prevent 7-day token expiration, switch the Google Cloud project to **In Production**. In production status, refresh tokens remain valid until revoked, inactive for 6 months, or password change on sensitive accounts.
+- **Scope Restriction:** Kaaj requests the narrow scope `https://www.googleapis.com/auth/drive.file`. This scope grants access only to files and folders created or opened by Kaaj, protecting the user's broader Drive.
+- **Drive Code Notice:** Google Drive code integration is deferred to later phases; only architecture and contracts are specified here.
+
+### 4.2 Backup Policy
+
+- **Periodic Backup:** Runs every 15 minutes in the background, only if unbacked changes exist.
+- **Session Close Backup:** Triggers when the user closes or navigates away from an entry.
+- **Manual Backup:** Triggered on user demand via settings/backup action.
+
+### 4.3 Drive Directory Hierarchy
 
 ```
 Google Drive: "Kaaj Archive/"
@@ -296,22 +312,9 @@ flowchart TD
 
 ---
 
-## 8. Open Questions for the Owner
+## 8. Architectural Decisions (LOCKED / DEFAULT)
 
-The following items need your decision before implementation:
-
-1. **Local Vault Location:**
-   - Where should the local vault reside by default on desktop systems (e.g. `%APPDATA%/Kaaj/vault` on Windows, `~/Library/Application Support/Kaaj/vault` on macOS, or a user-selected directory)?
-   - For web browser mode, should the vault use the Origin Private File System (OPFS) or standard IndexedDB?
-
-2. **Google Drive Authentication Flow:**
-   - Should Drive integration use a user-interactive OAuth2 consent flow (client secret and refresh token per user), or an automated Service Account with a dedicated shared Drive folder?
-
-3. **Drive Backup Trigger Policy:**
-   - When should full snapshot backups trigger to Google Drive?
-     - Option A: After every save where sync state transitions to State 1.
-     - Option B: Periodic scheduled background timer (e.g. every 15 or 30 minutes).
-     - Option C: On entry close and application exit.
-
-4. **Chunk Size Thresholds:**
-   - Is **50 blocks** and **64 KB** the desired split boundary, or should chunks scale based on image density?
+1. **Vault Architecture (LOCKED):** OPFS (Origin Private File System) in modern browsers, with IndexedDB fallback. OS application-data directory in native wrappers later. Accessed through a single `VaultStore` interface.
+2. **Google Drive Authentication (LOCKED):** User OAuth2 flow with refresh tokens and narrow scope `drive.file`. Google Cloud project must be configured as "In Production" to avoid the 7-day refresh token expiration limit.
+3. **Backup Policy (LOCKED):** Periodic every 15 minutes (only if content modified), on entry close, and manual user trigger.
+4. **Chunk Size Thresholds (DEFAULT):** 50 blocks / 64 KB default split boundary. Tuned in Step 3.

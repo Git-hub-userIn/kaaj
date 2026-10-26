@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import sharp from 'sharp';
@@ -28,14 +29,44 @@ export class LocalDiskAssetStore implements AssetStore {
   private thumbsDir: string;
   private metaMap: Map<string, AssetRecord> = new Map();
 
+  private metaFile: string;
+  private initialized = false;
+
   constructor(baseDir: string) {
     this.baseDir = baseDir;
     this.thumbsDir = path.join(baseDir, 'thumbs');
+    this.metaFile = path.join(baseDir, 'meta.json');
   }
 
   async init(): Promise<void> {
+    if (this.initialized) return;
     await fs.mkdir(this.baseDir, { recursive: true });
     await fs.mkdir(this.thumbsDir, { recursive: true });
+    try {
+      const raw = await fs.readFile(this.metaFile, 'utf8');
+      const records = JSON.parse(raw);
+      if (Array.isArray(records)) {
+        for (const record of records) {
+          if (record && record.id) {
+            this.metaMap.set(record.id, record);
+          }
+        }
+      }
+    } catch {
+      // meta.json may not exist yet
+    }
+    this.initialized = true;
+  }
+
+  private async persistMeta(): Promise<void> {
+    try {
+      const records = Array.from(this.metaMap.values());
+      const tmpPath = `${this.metaFile}.tmp`;
+      await fs.writeFile(tmpPath, JSON.stringify(records, null, 2), 'utf8');
+      await fs.rename(tmpPath, this.metaFile);
+    } catch (err) {
+      console.warn('Failed to persist asset meta.json:', err);
+    }
   }
 
   async put(buffer: Buffer, mime: string, originalName?: string): Promise<{ asset: AssetRecord; thumb320: Buffer; thumb960: Buffer }> {
@@ -85,6 +116,7 @@ export class LocalDiskAssetStore implements AssetStore {
     };
 
     this.metaMap.set(id, asset);
+    await this.persistMeta();
     return { asset, thumb320, thumb960 };
   }
 
@@ -121,6 +153,31 @@ export class LocalDiskAssetStore implements AssetStore {
   }
 
   getRecord(id: string): AssetRecord | undefined {
-    return this.metaMap.get(id);
+    const existing = this.metaMap.get(id);
+    if (existing) return existing;
+
+    for (const ext of ['png', 'jpg', 'webp', 'gif']) {
+      const storageKey = `${id}.${ext}`;
+      const filePath = path.join(this.baseDir, storageKey);
+      try {
+        if (fsSync.existsSync(filePath)) {
+          const mime = ext === 'png' ? 'image/png' : ext === 'jpg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/gif';
+          const stat = fsSync.statSync(filePath);
+          const recovered: AssetRecord = {
+            id,
+            storageKey,
+            mime,
+            bytes: stat.size,
+            checksum: '',
+            createdAt: stat.birthtime.toISOString(),
+          };
+          this.metaMap.set(id, recovered);
+          return recovered;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return undefined;
   }
 }

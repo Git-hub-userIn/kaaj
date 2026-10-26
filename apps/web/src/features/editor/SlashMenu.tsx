@@ -16,6 +16,7 @@ import {
   ListOrdered,
   Quote,
   Minus,
+  Image as ImageIcon,
 } from 'lucide-react';
 
 export interface SlashMenuProps {
@@ -24,6 +25,7 @@ export interface SlashMenuProps {
   onClose: () => void;
   coords: { x: number; y: number } | null;
   query: string;
+  onInsertImage?: () => void;
 }
 
 interface MenuItem {
@@ -40,6 +42,7 @@ export const SlashMenu: React.FC<SlashMenuProps> = ({
   onClose,
   coords,
   query,
+  onInsertImage,
 }) => {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -100,6 +103,17 @@ export const SlashMenu: React.FC<SlashMenuProps> = ({
       description: 'Horizontal separator line',
       icon: <Minus size={16} aria-hidden="true" />,
       action: (ed) => ed.chain().focus().setHorizontalRule().run(),
+    },
+    {
+      id: 'image',
+      label: 'Image',
+      description: 'Upload and insert an image visual',
+      icon: <ImageIcon size={16} aria-hidden="true" />,
+      action: () => {
+        if (onInsertImage) {
+          onInsertImage();
+        }
+      },
     },
   ];
 

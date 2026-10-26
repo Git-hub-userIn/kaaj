@@ -24,6 +24,7 @@ import {
 
 import { UniqueIdExtension } from './extensions/unique-id.js';
 import { FontSizeExtension } from './extensions/font-size.js';
+import { ImageBlockExtension } from './extensions/image-block.js';
 import { sanitizePastedHtml } from './paste-sanitizer.js';
 import { SelectionToolbar } from './SelectionToolbar.js';
 import { SlashMenu } from './SlashMenu.js';
@@ -39,7 +40,8 @@ import {
   type EntryDraft,
 } from './storage/draft-store.js';
 import { ensureFontLoaded } from './font-loader.js';
-import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { API_BASE_URL, AUTH_TOKEN } from '../../config/api.js';
+import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon } from 'lucide-react';
 
 export interface EntryEditorScreenProps {
   entryId: string;
@@ -57,7 +59,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   const [entry, setEntry] = useState<LoadedEntry | null>(null);
   const [title, setTitle] = useState('');
   const [saveStatus, setSaveStatus] = useState<SaveStatusState>('saved');
-  const [saveStatusText, setSaveStatusText] = useState('Saved · just now');
+  const [saveStatusText, setSaveStatusText] = useState('Saved Â· just now');
   const [sizeWarning, setSizeWarning] = useState<string | null>(null);
   const [sizeError, setSizeError] = useState<string | null>(null);
 
@@ -75,6 +77,12 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashCoords, setSlashCoords] = useState<{ x: number; y: number } | null>(null);
   const [slashQuery, setSlashQuery] = useState('');
+
+  // Image upload and error state
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const processImageUploadRef = useRef<(file: File, targetPos?: number) => Promise<void>>();
 
   // Refs for autosave orchestration
   const entryRef = useRef<LoadedEntry | null>(null);
@@ -145,6 +153,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       FontFamily,
       FontSizeExtension,
       UniqueIdExtension,
+      ImageBlockExtension,
     ],
     editorProps: {
       attributes: {
@@ -155,6 +164,29 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       },
       transformPastedHTML(html) {
         return sanitizePastedHtml(html);
+      },
+      handlePaste(_view, event) {
+        const files = event.clipboardData?.files;
+        if (files && files.length > 0) {
+          for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            processImageUploadRef.current?.(file);
+            return true;
+          }
+        }
+        return false;
+      },
+      handleDrop(view, event) {
+        const files = event.dataTransfer?.files;
+        if (files && files.length > 0) {
+          for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const coordinates = view.posAtCoords({ left: event.clientX, top: event.clientY });
+            processImageUploadRef.current?.(file, coordinates?.pos);
+            return true;
+          }
+        }
+        return false;
       },
       handleKeyDown(_view, event) {
         if (event.key === 'Escape') {
@@ -209,6 +241,83 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
     },
   });
 
+  // Image upload and validation handler
+  const processImageUpload = useCallback(
+    async (file: File, targetPos?: number) => {
+      // 1. Validate MIME type
+      const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+      const isAllowedMime = allowedMimes.includes(file.type);
+      const isSvg = file.type.includes('svg') || file.name.toLowerCase().endsWith('.svg');
+
+      if (!isAllowedMime || isSvg) {
+        setUploadError('Unsupported image format. Allowed formats: JPEG, PNG, WebP, GIF. SVG is rejected.');
+        return;
+      }
+
+      // 2. Validate file size (20 MB limit)
+      const MAX_SIZE = 20 * 1024 * 1024;
+      if (file.size > MAX_SIZE) {
+        setUploadError('File exceeds maximum size limit of 20 MB.');
+        return;
+      }
+
+      setIsUploading(true);
+      setUploadError(null);
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${API_BASE_URL}/assets`, {
+          method: 'POST',
+          headers: {
+            Authorization: AUTH_TOKEN,
+          },
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `Upload failed with status ${response.status}`);
+        }
+
+        const data = await response.json();
+        const assetId = data.asset?.id;
+        if (!assetId) {
+          throw new Error('Server did not return a valid asset identifier');
+        }
+
+        if (editor) {
+          if (typeof targetPos === 'number') {
+            editor
+              .chain()
+              .focus()
+              .insertContentAt(targetPos, {
+                type: 'image',
+                attrs: {
+                  id: `b_${crypto.randomUUID()}`,
+                  assetId,
+                  alt: '',
+                  width: 1.0,
+                },
+              })
+              .run();
+          } else {
+            editor.chain().focus().setImageBlock({ assetId, alt: '', width: 1.0 }).run();
+          }
+        }
+      } catch (err: any) {
+        console.error('Asset upload exception:', err);
+        setUploadError(err.message || 'Image upload failed. Please try again.');
+      } finally {
+        setIsUploading(false);
+      }
+    },
+    [editor]
+  );
+
+  processImageUploadRef.current = processImageUpload;
+
   // Core save routine
   const performSave = useCallback(
     async (options?: { keepalive?: boolean }) => {
@@ -228,7 +337,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       // If document is over hard limit, block save
       if (!checkSizeLimits(currentDoc)) {
         setSaveStatus('error');
-        setSaveStatusText("Couldn't save · Over 2 MB limit");
+        setSaveStatusText("Couldn't save Â· Over 2 MB limit");
         return;
       }
 
@@ -238,7 +347,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       // Skip save if nothing changed
       if (currentHash === lastSavedHashRef.current) {
         setSaveStatus('saved');
-        setSaveStatusText('Saved · just now');
+        setSaveStatusText('Saved Â· just now');
         return;
       }
 
@@ -265,7 +374,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
           // 409 conflict
           isSavingRef.current = false;
           setSaveStatus('error');
-          setSaveStatusText("Couldn't save · Conflict");
+          setSaveStatusText("Couldn't save Â· Conflict");
           setConflictState({
             serverVersion: result.currentVersion ?? currentEntry.version + 1,
             localDoc: currentDoc,
@@ -294,11 +403,11 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         deleteDraft(currentEntry.id);
 
         setSaveStatus('saved');
-        setSaveStatusText('Saved · just now');
+        setSaveStatusText('Saved Â· just now');
       } catch (err) {
         console.warn('Save failed:', err);
         setSaveStatus('error');
-        setSaveStatusText("Couldn't save · Retry");
+        setSaveStatusText("Couldn't save Â· Retry");
 
         // Retry with backoff if network failure
         const nextRetry = Math.min(3, retryCountRef.current + 1);
@@ -386,7 +495,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
           setPendingDraft(draft);
         }
         setSaveStatus('error');
-        setSaveStatusText("Couldn't save · Retry");
+        setSaveStatusText("Couldn't save Â· Retry");
       }
     }
 
@@ -484,7 +593,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         deleteDraft(entryId);
         setConflictState(null);
         setSaveStatus('saved');
-        setSaveStatusText('Saved · just now');
+        setSaveStatusText('Saved Â· just now');
       } catch (err) {
         console.warn('Failed to load server version:', err);
       }
@@ -654,36 +763,80 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
             <span>Category</span>
           </button>
 
-          {/* Quiet Save Status */}
-          <button
-            type="button"
-            data-testid="save-status-indicator"
-            aria-live="polite"
-            onClick={() => performSave()}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              backgroundColor: 'transparent',
-              border: 'none',
-              cursor: saveStatus === 'error' ? 'pointer' : 'default',
-              color:
-                saveStatus === 'error'
-                  ? COLOR_TOKENS.terracottaDark
-                  : COLOR_TOKENS.inkLight,
-              fontSize: '13px',
-              fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
-              padding: '6px 8px',
-              borderRadius: RADIUS_TOKENS.sm,
-              textDecoration: saveStatus === 'error' ? 'underline' : 'none',
-            }}
-          >
-            {saveStatus === 'saving' && <RefreshCw size={12} className="spin" aria-hidden="true" />}
-            {saveStatus === 'saved' && <CheckCircle2 size={12} aria-hidden="true" />}
-            {saveStatus === 'error' && <AlertCircle size={12} aria-hidden="true" />}
-            <span>{saveStatusText}</span>
-          </button>
+          {/* Actions & Quiet Save Status */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {/* Insert Image Button */}
+            <button
+              type="button"
+              data-testid="toolbar-insert-image"
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                backgroundColor: 'transparent',
+                border: `1px solid ${COLOR_TOKENS.paperDark}`,
+                borderRadius: RADIUS_TOKENS.sm,
+                cursor: 'pointer',
+                color: COLOR_TOKENS.inkMuted,
+                fontSize: '13px',
+                padding: '4px 8px',
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                transition: 'all 0.15s ease',
+              }}
+              title="Insert image visual (JPEG, PNG, WebP, GIF)"
+            >
+              <ImageIcon size={13} aria-hidden="true" />
+              <span>Image</span>
+            </button>
+
+            {/* Quiet Save Status */}
+            <button
+              type="button"
+              data-testid="save-status-indicator"
+              aria-live="polite"
+              onClick={() => performSave()}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: saveStatus === 'error' ? 'pointer' : 'default',
+                color:
+                  saveStatus === 'error'
+                    ? COLOR_TOKENS.terracottaDark
+                    : COLOR_TOKENS.inkLight,
+                fontSize: '13px',
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                padding: '6px 8px',
+                borderRadius: RADIUS_TOKENS.sm,
+                textDecoration: saveStatus === 'error' ? 'underline' : 'none',
+              }}
+            >
+              {saveStatus === 'saving' && <RefreshCw size={12} className="spin" aria-hidden="true" />}
+              {saveStatus === 'saved' && <CheckCircle2 size={12} aria-hidden="true" />}
+              {saveStatus === 'error' && <AlertCircle size={12} aria-hidden="true" />}
+              <span>{saveStatusText}</span>
+            </button>
+          </div>
         </header>
+
+        {/* Hidden File Input for Image Uploads */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          data-testid="image-file-input"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              processImageUploadRef.current?.(file);
+            }
+            e.target.value = '';
+          }}
+        />
 
         {/* 409 Conflict Banner */}
         {conflictState && (
@@ -890,9 +1043,46 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
               onClose={() => setSlashMenuOpen(false)}
               coords={slashCoords}
               query={slashQuery}
+              onInsertImage={() => fileInputRef.current?.click()}
             />
           )}
           <EditorContent editor={editor} />
+
+          {/* Upload Error Banner / Toast */}
+          {uploadError && (
+            <div
+              role="alert"
+              data-testid="editor-error-toast"
+              className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-[#8b3a2b] text-[#fcfbf7] px-4 py-3 rounded shadow-xl text-xs max-w-md"
+              style={{
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                animation: 'fadeIn 0.2s ease',
+              }}
+            >
+              <AlertCircle size={16} className="shrink-0 text-[#fcfbf7]" />
+              <span className="flex-1">{uploadError}</span>
+              <button
+                type="button"
+                onClick={() => setUploadError(null)}
+                className="p-1 hover:bg-[#a14332] rounded text-white cursor-pointer"
+                aria-label="Dismiss error notification"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Upload Progress Indicator */}
+          {isUploading && (
+            <div
+              data-testid="upload-indicator"
+              className="fixed bottom-6 left-6 z-50 flex items-center gap-2.5 bg-[#231e1a] text-[#f7f4ee] px-3.5 py-2.5 rounded shadow-lg text-xs"
+              style={{ fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans }}
+            >
+              <RefreshCw size={14} className="spin text-[#d48344]" />
+              <span>Uploading visual...</span>
+            </div>
+          )}
         </main>
       </div>
     </div>
