@@ -838,7 +838,7 @@ export function normalizeBlockForHash(block: any): any {
 export function computeContentHash(content: string | object): string {
   const str = typeof content === 'string'
     ? content
-    : JSON.stringify(normalizeBlockForHash(content));
+    : canonicalDocJson(normalizeBlockForHash(content));
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
   for (let i = 0; i < str.length; i++) {
     const ch = str.charCodeAt(i);

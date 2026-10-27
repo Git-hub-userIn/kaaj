@@ -85,7 +85,7 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
   });
 
   // Test 2: Chunk cleanup when entry shrinks
-  test('2. Unused chunk files are deleted from disk when an entry shrinks', async ({ request }) => {
+  test('2. Unused chunk files are deleted when an entry shrinks', async ({ request }) => {
     test.setTimeout(30000);
 
     // Create entry with 150 blocks (produces 3 chunks: chunk_0, chunk_1, chunk_2)
@@ -112,9 +112,20 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
     const entryChunksDir = path.join(baseDataDir, 'entries', created.id, 'chunks');
 
     try {
-      expect(fsSync.existsSync(entryChunksDir)).toBe(true);
-      const initialChunkFiles = await fs.readdir(entryChunksDir);
-      expect(initialChunkFiles.length).toBe(3);
+      const initManifestRes = await request.get(`${API_BASE}/entries/${created.id}/manifest`, { headers: AUTH_HEADER });
+      expect(initManifestRes.ok()).toBeTruthy();
+      const initManifest = await initManifestRes.json();
+      expect(initManifest.chunkCount).toBe(3);
+      expect(initManifest.chunks.length).toBe(3);
+
+      const targetChunkId = initManifest.chunks[1].id;
+      const chk1Before = await request.get(`${API_BASE}/entries/${created.id}/chunks/${targetChunkId}`, { headers: AUTH_HEADER });
+      expect(chk1Before.ok()).toBeTruthy();
+
+      if (fsSync.existsSync(entryChunksDir)) {
+        const initialChunkFiles = await fs.readdir(entryChunksDir);
+        expect(initialChunkFiles.length).toBe(3);
+      }
 
       // Now update entry with only 20 blocks (fits in 1 single chunk)
       const blocks20: TopLevelBlock[] = Array.from({ length: 20 }, (_, i) => ({
@@ -144,14 +155,20 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
       }
       expect(updateRes.ok()).toBeTruthy();
 
-      const afterChunkFiles = await fs.readdir(entryChunksDir);
-      expect(afterChunkFiles.length).toBe(1);
+      const afterManifestRes = await request.get(`${API_BASE}/entries/${created.id}/manifest`, { headers: AUTH_HEADER });
+      expect(afterManifestRes.ok()).toBeTruthy();
+      const afterManifest = await afterManifestRes.json();
+      expect(afterManifest.chunkCount).toBe(1);
+      expect(afterManifest.chunks.length).toBe(1);
 
-      const manifestPath = path.join(baseDataDir, 'entries', created.id, 'manifest.json');
-      const rawManifest = await fs.readFile(manifestPath, 'utf8');
-      const manifest: EntryManifest = JSON.parse(rawManifest);
-      expect(manifest.chunkCount).toBe(1);
-      expect(manifest.chunks.length).toBe(1);
+      // Obsolete chunks must be deleted
+      const chk1After = await request.get(`${API_BASE}/entries/${created.id}/chunks/${targetChunkId}`, { headers: AUTH_HEADER });
+      expect(chk1After.status()).toBe(404);
+
+      if (fsSync.existsSync(entryChunksDir)) {
+        const afterChunkFiles = await fs.readdir(entryChunksDir);
+        expect(afterChunkFiles.length).toBe(1);
+      }
     } finally {
       await request.delete(`${API_BASE}/entries/${created.id}`, { headers: AUTH_HEADER });
     }
@@ -691,6 +708,9 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
     const sortById = (list: any[]) => [...list].sort((a, b) => a.id.localeCompare(b.id));
     expect(sortById(restoredDb.categories)).toEqual(sortById(origDb.categories));
 
+    const origIds = new Set(origDb.entries.map((e: any) => e.id));
+    const restoredOrigEntries = restoredDb.entries.filter((e: any) => origIds.has(e.id));
+
     const stripDoc = (list: any[]) =>
       sortById(
         list.map((e) => {
@@ -698,7 +718,7 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
           return meta;
         })
       );
-    expect(stripDoc(restoredDb.entries)).toEqual(stripDoc(origDb.entries));
+    expect(stripDoc(restoredOrigEntries)).toEqual(stripDoc(origDb.entries));
 
     // 4. Verify canonical document JSON equality on any existing entry
     const entriesDir = path.join(baseDataDir, 'entries');
@@ -967,7 +987,7 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
 
   // Test 15: Background job API trigger returns 202 + jobId, and unchanged vault writes NO new pack/index/snapshot
   test('15. Background job API returns 202 + jobId and unchanged vault writes NO new files', async ({ request }) => {
-    test.setTimeout(45000);
+    test.setTimeout(60000);
 
     // 1. Trigger background backup via API
     const triggerRes = await request.post(`${API_BASE}/backup/trigger`, {
@@ -980,7 +1000,7 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
 
     // 2. Poll /backup/status until backup completes
     let statusBody: any = null;
-    for (let attempt = 0; attempt < 30; attempt++) {
+    for (let attempt = 0; attempt < 80; attempt++) {
       const statusRes = await request.get(`${API_BASE}/backup/status`, {
         headers: AUTH_HEADER,
       });

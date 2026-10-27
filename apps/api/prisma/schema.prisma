@@ -1,0 +1,117 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Category {
+  id           String    @id @default(uuid())
+  title        String
+  description  String?
+  coverAssetId String?
+  sortOrder    Int       @default(0)
+  color        String?
+  todo         Json      @default("[]")
+  version      Int       @default(1)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  entries      Entry[]
+
+  @@index([deletedAt])
+  @@index([sortOrder])
+}
+
+model Entry {
+  id            String         @id @default(uuid())
+  categoryId    String
+  title         String
+  color         String?
+  pinned        Boolean        @default(false)
+  weight        Int            @default(1)
+  sortOrder     Int            @default(0)
+  version       Int            @default(1)
+  schemaVersion Int            @default(2)
+  spine         Json?
+  stats         Json?
+  lastOpenedAt  DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  deletedAt     DateTime?
+
+  category      Category       @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  manifest      EntryManifest?
+  chunks        Chunk[]
+
+  @@index([categoryId])
+  @@index([deletedAt])
+  @@index([sortOrder])
+}
+
+model EntryManifest {
+  id            String   @id @default(uuid())
+  entryId       String   @unique
+  schemaVersion Int      @default(2)
+  version       Int
+  totalBlocks   Int      @default(0)
+  chunkCount    Int      @default(0)
+  stats         Json?
+  chunks        Json
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  entry         Entry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+}
+
+model Chunk {
+  id         String
+  entryId    String
+  order      Int      @default(0)
+  version    Int      @default(1)
+  checksum   String
+  bytes      Int      @default(0)
+  blockCount Int      @default(0)
+  payload    Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  entry      Entry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@id([entryId, id])
+  @@index([entryId])
+}
+
+model AssetMeta {
+  id           String   @id
+  storageKey   String   @unique
+  mime         String
+  bytes        Int
+  width        Int?
+  height       Int?
+  originalName String?
+  checksum     String
+  createdAt    DateTime @default(now())
+}
+
+model MaintenanceState {
+  id              String    @id @default("singleton")
+  lastBackupAt    DateTime?
+  lastPruneAt     DateTime?
+  lastResult      String?
+  lastError       String?
+  remoteFileCount Int?
+  updatedAt       DateTime  @updatedAt
+}
+
+model JobLease {
+  name       String   @id
+  holder     String
+  token      BigInt   @default(0)
+  acquiredAt DateTime
+  expiresAt  DateTime
+  updatedAt  DateTime @updatedAt
+}

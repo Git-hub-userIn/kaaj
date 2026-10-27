@@ -4,7 +4,7 @@ export interface AuthContext {
   subject: string;
 }
 
-const DEV_TOKEN = process.env.KAAJ_DEV_AUTH_TOKEN || 'kaaj-local-dev-token';
+const DEV_TOKEN = process.env.DEV_AUTH_TOKEN || process.env.KAAJ_DEV_AUTH_TOKEN || 'kaaj-local-dev-token';
 
 export async function authGuard(c: Context, next: Next): Promise<Response | void> {
   const isProduction = process.env.NODE_ENV === 'production';
@@ -13,7 +13,7 @@ export async function authGuard(c: Context, next: Next): Promise<Response | void
   if (!isProduction) {
     // In local development, accept fixed dev token or default subject
     const token = authHeader?.replace('Bearer ', '');
-    if (!token || token === DEV_TOKEN) {
+    if (!token || token === DEV_TOKEN || token === 'kaaj-local-dev-token') {
       c.set('auth', { subject: 'dev-owner-user' } as AuthContext);
       return await next();
     }

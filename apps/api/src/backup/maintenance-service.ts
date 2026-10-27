@@ -8,6 +8,8 @@ import { checkBackupRepository } from './backup-check.js';
 import { pruneBackups } from './backup-prune.js';
 import { createPack, extractBlobFromPack, readPackFooter, type PackBlobInput } from './pack-format.js';
 import type { IndexFile, SnapshotManifestV3 } from './repository-types.js';
+import { prisma as defaultPrisma } from '../db/client.js';
+import type { PrismaClient } from '../generated/client/index.js';
 
 export const REMOTE_FILE_COUNT_THRESHOLD = 100;
 export const SMALL_PACK_THRESHOLD_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -49,18 +51,20 @@ export class MaintenanceService {
   private target: BackupTarget;
   private jobLock: JobLock;
   private stateFilePath: string;
+  private prisma: PrismaClient;
   private lastEditAt = 0;
 
-  constructor(baseDataDir: string, target: BackupTarget) {
+  constructor(baseDataDir: string, target: BackupTarget, prisma?: PrismaClient) {
     this.baseDataDir = baseDataDir;
     this.target = target;
-    this.jobLock = new JobLock(target);
+    this.prisma = prisma || defaultPrisma;
+    this.jobLock = new JobLock(target, this.prisma);
     this.stateFilePath = path.join(baseDataDir, 'maintenance-state.json');
   }
 
   setTarget(target: BackupTarget): void {
     this.target = target;
-    this.jobLock = new JobLock(target);
+    this.jobLock = new JobLock(target, this.prisma);
   }
 
   recordEdit(nowMs = Date.now()): void {
@@ -72,6 +76,21 @@ export class MaintenanceService {
   }
 
   async getState(): Promise<MaintenanceState> {
+    try {
+      const dbState = await this.prisma.maintenanceState.findUnique({
+        where: { id: 'singleton' },
+      });
+      if (dbState) {
+        return {
+          lastBackupAt: dbState.lastBackupAt ? dbState.lastBackupAt.toISOString() : null,
+          lastPruneAt: dbState.lastPruneAt ? dbState.lastPruneAt.toISOString() : null,
+          lastResult: dbState.lastResult ?? null,
+          lastError: dbState.lastError ?? null,
+          remoteFileCount: dbState.remoteFileCount ?? undefined,
+        };
+      }
+    } catch {}
+
     try {
       if (fsSync.existsSync(this.stateFilePath)) {
         const raw = await fs.readFile(this.stateFilePath, 'utf8');
@@ -97,6 +116,30 @@ export class MaintenanceService {
 
   async saveState(state: MaintenanceState): Promise<void> {
     try {
+      // 1. Persist to PostgreSQL
+      await this.prisma.maintenanceState.upsert({
+        where: { id: 'singleton' },
+        create: {
+          id: 'singleton',
+          lastBackupAt: state.lastBackupAt ? new Date(state.lastBackupAt) : null,
+          lastPruneAt: state.lastPruneAt ? new Date(state.lastPruneAt) : null,
+          lastResult: state.lastResult ?? null,
+          lastError: state.lastError ?? null,
+          remoteFileCount: state.remoteFileCount ?? null,
+        },
+        update: {
+          lastBackupAt: state.lastBackupAt ? new Date(state.lastBackupAt) : null,
+          lastPruneAt: state.lastPruneAt ? new Date(state.lastPruneAt) : null,
+          lastResult: state.lastResult ?? null,
+          lastError: state.lastError ?? null,
+          remoteFileCount: state.remoteFileCount ?? null,
+        },
+      });
+    } catch (dbErr) {
+      console.warn('[MAINTENANCE] Failed to persist state in DB:', dbErr);
+    }
+
+    try {
       await fs.mkdir(this.baseDataDir, { recursive: true });
       const raw = JSON.stringify(state, null, 2);
       await fs.writeFile(this.stateFilePath, raw, 'utf8');
@@ -104,7 +147,7 @@ export class MaintenanceService {
       // Mirror state onto remote backup target
       await this.target.put('maintenance.json', Buffer.from(raw, 'utf8'), 'application/json');
     } catch (err) {
-      console.warn('[MAINTENANCE] Failed to persist state:', err);
+      console.warn('[MAINTENANCE] Failed to persist state to file/target:', err);
     }
   }
 

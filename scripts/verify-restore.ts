@@ -236,12 +236,29 @@ if (
   const liveDir = path.resolve(root, 'data');
   const backupDir = process.env.BACKUP_DIR || path.resolve(liveDir, 'backup-snapshots');
 
-  const target = new LocalFolderBackupTarget(backupDir);
+  const backupTargetEnv = (process.env.BACKUP_TARGET || '').toLowerCase();
+  let target: BackupTarget;
+
+  if (backupTargetEnv === 'drive') {
+    const tokenFilePath = process.env.GOOGLE_TOKEN_FILE || path.resolve(liveDir, 'google-oauth.json');
+    const cacheFilePath = process.env.GOOGLE_DRIVE_CACHE_FILE || path.resolve(liveDir, 'drive-file-cache.json');
+    const folderName = process.env.BACKUP_DRIVE_FOLDER_NAME || (process.env.APP_MODE === 'test' ? 'Kaaj-test' : 'Kaaj');
+    target = new GoogleDriveBackupTarget({
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      redirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3001/auth/google/callback',
+      tokenFilePath,
+      cacheFilePath,
+      folderName,
+    });
+  } else {
+    target = new LocalFolderBackupTarget(backupDir);
+  }
 
   console.log('==================================================');
   console.log('KAAJ BACKUP VERIFY-RESTORE');
   console.log(`Live data: ${liveDir}`);
-  console.log(`Target:    ${target.name} (${backupDir})`);
+  console.log(`Target:    ${target.name}`);
   console.log('==================================================');
 
   verifyRestore(target, liveDir)

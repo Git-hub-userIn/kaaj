@@ -27,6 +27,7 @@ import {
   generateGoogleAuthUrl,
   exchangeCodeForTokens,
 } from './backup/google-drive-backup-target.js';
+import { checkPostgresReachable, closeDb, resolveDatabaseUrl } from './db/client.js';
 
 const app = new Hono();
 
@@ -53,9 +54,13 @@ const seedCoversDir = path.resolve(repoRoot, 'packages', 'design', 'assets', 'se
 const assetStore = new LocalDiskAssetStore(storageDir);
 const categoriesService = new CategoriesService(baseDataDir, assetStore, seedCoversDir);
 
+// Check PostgreSQL connectivity at startup (fail fast with clear diagnostics)
+await checkPostgresReachable();
+
 const defaultBackupDir = process.env.BACKUP_DIR || path.resolve(repoRoot, 'data', 'backup-snapshots');
 const tokenFilePath = process.env.GOOGLE_TOKEN_FILE || path.resolve(baseDataDir, 'google-oauth.json');
 const cacheFilePath = process.env.GOOGLE_DRIVE_CACHE_FILE || path.resolve(baseDataDir, 'drive-file-cache.json');
+const driveFolderName = process.env.BACKUP_DRIVE_FOLDER_NAME || (process.env.APP_MODE === 'test' ? 'Kaaj-test' : 'Kaaj');
 
 const googleDriveTarget = new GoogleDriveBackupTarget({
   clientId: process.env.GOOGLE_CLIENT_ID,
@@ -63,10 +68,21 @@ const googleDriveTarget = new GoogleDriveBackupTarget({
   redirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3001/auth/google/callback',
   tokenFilePath,
   cacheFilePath,
+  folderName: driveFolderName,
 });
 
 const localBackupTarget = new LocalFolderBackupTarget(defaultBackupDir);
-const activeBackupTarget = googleDriveTarget.hasValidAuth() ? googleDriveTarget : localBackupTarget;
+const backupTargetMode = (process.env.BACKUP_TARGET || '').toLowerCase();
+const isTestMode = process.env.APP_MODE === 'test';
+const activeBackupTarget =
+  backupTargetMode === 'local' || (isTestMode && backupTargetMode !== 'drive')
+    ? localBackupTarget
+    : backupTargetMode === 'drive'
+    ? googleDriveTarget
+    : googleDriveTarget.hasValidAuth()
+    ? googleDriveTarget
+    : localBackupTarget;
+
 const backupService = new BackupService(baseDataDir, activeBackupTarget);
 const maintenanceService = new MaintenanceService(baseDataDir, activeBackupTarget);
 backupService.setMaintenanceService(maintenanceService);
@@ -80,6 +96,9 @@ app.get('/health', (c) => {
   return c.json({
     status: 'ok',
     phase: 'Phase 1 & 2',
+    appMode: process.env.APP_MODE || 'development',
+    driveFolderName,
+    backupTarget: activeBackupTarget.name,
     runtime: bunGlobal ? `Bun ${bunGlobal.version}` : `Node ${process.version}`,
     timestamp: new Date().toISOString(),
   });
@@ -422,7 +441,7 @@ app.post('/assets', async (c) => {
 
 app.get('/assets/:id', async (c) => {
   const id = c.req.param('id');
-  const record = assetStore.getRecord(id);
+  const record = await assetStore.getRecord(id);
   if (!record) {
     return c.text('Asset not found', 404);
   }
@@ -611,6 +630,17 @@ if (!isBun) {
 } else {
   console.log(`Starting Kaaj API on Bun native server on port ${PORT}...`);
 }
+
+const gracefulShutdown = async () => {
+  console.log('Shutting down Kaaj API gracefully...');
+  maintenanceScheduler.stop();
+  backupService.stopPeriodicTimer();
+  await closeDb();
+  process.exit(0);
+};
+
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
 
 export default {
   port: PORT,

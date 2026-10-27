@@ -34,6 +34,8 @@ if (!process.env.PLAYWRIGHT_PORTS_CHECKED && process.env.TEST_WORKER_INDEX === u
 }
 
 export default defineConfig({
+  globalSetup: './global-setup.ts',
+  globalTeardown: './global-teardown.ts',
   testDir: './',
   timeout: 30000,
   expect: {
@@ -57,8 +59,12 @@ export default defineConfig({
       cwd: '../',
       port: 3001,
       reuseExistingServer: false,
-      stdout: 'ignore',
+      stdout: 'pipe',
       stderr: 'pipe',
+      env: {
+        APP_MODE: 'test',
+        BACKUP_DRIVE_FOLDER_NAME: 'Kaaj-test',
+      },
     },
     {
       command: 'bun run --filter @kaaj/web dev --port 3000',
@@ -67,6 +73,10 @@ export default defineConfig({
       reuseExistingServer: false,
       stdout: 'ignore',
       stderr: 'pipe',
+      env: {
+        APP_MODE: 'test',
+        BACKUP_DRIVE_FOLDER_NAME: 'Kaaj-test',
+      },
     },
   ],
 });

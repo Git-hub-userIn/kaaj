@@ -14,13 +14,20 @@
     "@hono/zod-validator": "^0.4.3",
     "@kaaj/design": "workspace:*",
     "@kaaj/doc-model": "workspace:*",
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "@prisma/client-runtime-utils": "7.10.1",
+    "dotenv": "17.4.2",
     "hono": "^4.7.4",
+    "pg": "8.13.3",
     "sharp": "^0.33.5",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.1",
     "@types/node": "^22.13.10",
+    "@types/pg": "8.11.11",
+    "prisma": "7.10.1",
     "tsx": "^4.19.3",
     "typescript": "^5.7.3"
   }

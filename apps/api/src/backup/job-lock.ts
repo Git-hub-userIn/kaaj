@@ -1,4 +1,7 @@
 import type { BackupTarget } from './backup-target.js';
+import { prisma as defaultPrisma } from '../db/client.js';
+import { JobLeaseManager } from '../db/hot-paths.js';
+import type { PrismaClient } from '../generated/client/index.js';
 
 export interface LockData {
   holder: string;
@@ -8,128 +11,52 @@ export interface LockData {
 }
 
 /**
- * Cooperative lease lock with heartbeat and monotonic fencing token.
- * Prevents concurrent backup and prune operations.
- * Stale leases expire automatically so crashed processes do not cause permanent deadlocks.
+ * Cooperative lease lock with heartbeat and monotonic fencing token stored in PostgreSQL.
+ * Replaces file-based lock with ACID-compliant, crash-resilient database row lease.
+ * Prevents concurrent backup and prune operations across clustered or concurrent instances.
  */
 export class JobLock {
-  private target: BackupTarget;
-  private lockPath = 'lock/job-lock.json';
-  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private leaseManager: JobLeaseManager;
   private activeToken: number | null = null;
   private activeHolder: string | null = null;
 
-  constructor(target: BackupTarget) {
-    this.target = target;
+  constructor(_target?: BackupTarget, prisma?: PrismaClient) {
+    this.leaseManager = new JobLeaseManager(prisma || defaultPrisma, 'backup_maintenance');
   }
 
   /**
-   * Attempts to acquire the lease lock.
+   * Attempts to acquire the lease lock in PostgreSQL.
    * Returns fencing token if acquired, or null if lock is currently held by an active lease.
    */
   async acquire(holder: string, ttlMs = 60000): Promise<number | null> {
-    const now = Date.now();
-    let currentLock: LockData | null = null;
-
-    try {
-      const raw = await this.target.get(this.lockPath);
-      if (raw) {
-        currentLock = JSON.parse(raw.toString('utf8'));
-      }
-    } catch {
-      // Lock file doesn't exist or is unparseable
+    const token = await this.leaseManager.acquire(holder, ttlMs);
+    if (token !== null) {
+      this.activeToken = token;
+      this.activeHolder = holder;
+      return token;
     }
-
-    if (currentLock && currentLock.expiresAt > now && currentLock.holder !== holder) {
-      // Valid unexpired lease held by someone else
-      return null;
-    }
-
-    const nextToken = (currentLock?.token ?? 0) + 1;
-    const newLock: LockData = {
-      holder,
-      token: nextToken,
-      acquiredAt: now,
-      expiresAt: now + ttlMs,
-    };
-
-    await this.target.put(
-      this.lockPath,
-      Buffer.from(JSON.stringify(newLock, null, 2), 'utf8'),
-      'application/json'
-    );
-
-    this.activeToken = nextToken;
-    this.activeHolder = holder;
-
-    // Start periodic heartbeat to renew lease
-    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-    const renewInterval = Math.max(1000, Math.floor(ttlMs / 2));
-    this.heartbeatTimer = setInterval(async () => {
-      try {
-        await this.heartbeat(ttlMs);
-      } catch (err) {
-        console.warn(`[JOB_LOCK] Heartbeat renewal failed for ${holder}:`, err);
-      }
-    }, renewInterval);
-
-    return nextToken;
+    return null;
   }
 
   /**
-   * Renews the active lease.
+   * Renews the active lease heartbeat in PostgreSQL.
    */
   async heartbeat(ttlMs = 60000): Promise<boolean> {
-    if (!this.activeToken || !this.activeHolder) return false;
-    const now = Date.now();
-    const renewedLock: LockData = {
-      holder: this.activeHolder,
-      token: this.activeToken,
-      acquiredAt: now,
-      expiresAt: now + ttlMs,
-    };
-    try {
-      await this.target.put(
-        this.lockPath,
-        Buffer.from(JSON.stringify(renewedLock, null, 2), 'utf8'),
-        'application/json'
-      );
-      return true;
-    } catch {
-      return false;
-    }
+    return await this.leaseManager.heartbeat(ttlMs);
   }
 
   /**
-   * Releases the lease lock.
+   * Validates if a fencing token is still active.
+   */
+  async validateToken(token: number): Promise<boolean> {
+    return await this.leaseManager.validateFencingToken(token);
+  }
+
+  /**
+   * Releases the lease lock in PostgreSQL.
    */
   async release(): Promise<void> {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
-
-    if (this.target.delete) {
-      try {
-        await this.target.delete(this.lockPath);
-      } catch {}
-    } else {
-      // Write expired lock if delete not supported
-      try {
-        const expiredLock: LockData = {
-          holder: '',
-          token: this.activeToken || 0,
-          acquiredAt: 0,
-          expiresAt: 0,
-        };
-        await this.target.put(
-          this.lockPath,
-          Buffer.from(JSON.stringify(expiredLock, null, 2), 'utf8'),
-          'application/json'
-        );
-      } catch {}
-    }
-
+    await this.leaseManager.release();
     this.activeToken = null;
     this.activeHolder = null;
   }

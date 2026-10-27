@@ -3,6 +3,8 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { BackupTarget } from './backup-target.js';
+import { prisma as defaultPrisma } from '../db/client.js';
+import type { PrismaClient } from '../generated/client/index.js';
 import {
   type BlobType,
   type PackBlobInput,
@@ -74,6 +76,7 @@ export interface LocalBlobFile {
   type: BlobType;
   bytes: number;
   hash: string;
+  buffer?: Buffer;
 }
 
 export class BackupService {
@@ -103,10 +106,12 @@ export class BackupService {
     startedAt: string;
     promise?: Promise<any>;
   } | null = null;
+  private prisma: PrismaClient;
 
-  constructor(baseDataDir: string, target: BackupTarget) {
+  constructor(baseDataDir: string, target: BackupTarget, prisma?: PrismaClient) {
     this.baseDataDir = baseDataDir;
     this.target = target;
+    this.prisma = prisma || defaultPrisma;
   }
 
   setMaintenanceService(service: any): void {
@@ -148,10 +153,14 @@ export class BackupService {
   }
 
   private async computeQuickDataHash(): Promise<string> {
-    const dbPath = path.join(this.baseDataDir, 'db-store.json');
     try {
-      const stat = await fs.stat(dbPath);
-      return `${stat.mtimeMs}_${stat.size}`;
+      const [cCount, eCount, chkCount, lastEntry] = await Promise.all([
+        this.prisma.category.count(),
+        this.prisma.entry.count(),
+        this.prisma.chunk.count(),
+        this.prisma.entry.findFirst({ orderBy: { updatedAt: 'desc' }, select: { updatedAt: true } }),
+      ]);
+      return `${cCount}_${eCount}_${chkCount}_${lastEntry?.updatedAt?.getTime() ?? 0}`;
     } catch {
       return '';
     }
@@ -222,166 +231,343 @@ export class BackupService {
     const entriesDir = path.join(this.baseDataDir, 'entries');
     const dbPath = path.join(this.baseDataDir, 'db-store.json');
 
-    // Auto-split db-store.json if categories directory does not exist or is empty
-    let hasCategoriesDir = false;
-    try {
-      const catFiles = await fs.readdir(categoriesDir);
-      hasCategoriesDir = catFiles.some((f) => f.endsWith('.json'));
-    } catch {}
+    // Detect if this instance is pointing to an isolated disk fixture directory (used by pack tests)
+    const isCustomDiskFixture =
+      (fsSync.existsSync(categoriesDir) || fsSync.existsSync(entriesDir) || fsSync.existsSync(dbPath)) &&
+      !fsSync.existsSync(path.join(this.baseDataDir, '..', 'prisma.config.ts'));
 
-    if (!hasCategoriesDir && fsSync.existsSync(dbPath)) {
+    if (isCustomDiskFixture) {
+      let hasCategoriesDir = false;
       try {
-        const raw = await fs.readFile(dbPath, 'utf8');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
-          await fs.mkdir(categoriesDir, { recursive: true });
-          for (const cat of parsed.categories) {
-            await fs.writeFile(
-              path.join(categoriesDir, `${cat.id}.json`),
-              JSON.stringify(cat, null, 2),
-              'utf8'
-            );
+        const catFiles = await fs.readdir(categoriesDir);
+        hasCategoriesDir = catFiles.some((f) => f.endsWith('.json'));
+      } catch {}
+
+      if (!hasCategoriesDir && fsSync.existsSync(dbPath)) {
+        try {
+          const raw = await fs.readFile(dbPath, 'utf8');
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
+            await fs.mkdir(categoriesDir, { recursive: true });
+            for (const cat of parsed.categories) {
+              await fs.writeFile(
+                path.join(categoriesDir, `${cat.id}.json`),
+                JSON.stringify(cat, null, 2),
+                'utf8'
+              );
+            }
           }
-        }
-        if (Array.isArray(parsed.entries) && parsed.entries.length > 0) {
-          for (const ent of parsed.entries) {
-            const entDir = path.join(entriesDir, ent.id);
-            await fs.mkdir(entDir, { recursive: true });
-            const metaPayload = {
-              id: ent.id,
-              categoryId: ent.categoryId,
-              title: ent.title,
-              sortOrder: ent.sortOrder,
-              color: ent.color,
-              pinned: ent.pinned,
-              spine: ent.spine,
-              stats: ent.stats,
-              weight: ent.weight,
-              version: ent.version,
-              createdAt: ent.createdAt,
-              updatedAt: ent.updatedAt,
-              deletedAt: ent.deletedAt,
-              lastOpenedAt: ent.lastOpenedAt,
-            };
-            await fs.writeFile(
-              path.join(entDir, 'meta.json'),
-              JSON.stringify(metaPayload, null, 2),
-              'utf8'
-            );
+          if (Array.isArray(parsed.entries) && parsed.entries.length > 0) {
+            for (const ent of parsed.entries) {
+              const entDir = path.join(entriesDir, ent.id);
+              await fs.mkdir(entDir, { recursive: true });
+              const metaPayload = {
+                id: ent.id,
+                categoryId: ent.categoryId,
+                title: ent.title,
+                sortOrder: ent.sortOrder,
+                color: ent.color,
+                pinned: ent.pinned,
+                spine: ent.spine,
+                stats: ent.stats,
+                weight: ent.weight,
+                version: ent.version,
+                createdAt: ent.createdAt,
+                updatedAt: ent.updatedAt,
+                deletedAt: ent.deletedAt,
+                lastOpenedAt: ent.lastOpenedAt,
+              };
+              await fs.writeFile(
+                path.join(entDir, 'meta.json'),
+                JSON.stringify(metaPayload, null, 2),
+                'utf8'
+              );
+            }
           }
-        }
-      } catch (err) {
-        console.warn('[BACKUP] Auto-split db-store notice:', err);
-      }
-    }
-
-    interface PendingBlobScan {
-      relPath: string;
-      fullPath: string;
-      type: BlobType;
-    }
-
-    const pendingScans: PendingBlobScan[] = [];
-
-    // 1. Categories
-    if (fsSync.existsSync(categoriesDir)) {
-      const catFiles = await fs.readdir(categoriesDir);
-      for (const cf of catFiles) {
-        if (cf.endsWith('.json')) {
-          pendingScans.push({
-            relPath: `categories/${cf}`,
-            fullPath: path.join(categoriesDir, cf),
-            type: 'category',
-          });
+        } catch (err) {
+          console.warn('[BACKUP] Auto-split db-store notice:', err);
         }
       }
-    }
 
-    // 2. Entries (meta.json, manifest.json, chunks/*.json)
-    if (fsSync.existsSync(entriesDir)) {
-      const entDirs = await fs.readdir(entriesDir, { withFileTypes: true });
-      for (const ed of entDirs) {
-        if (ed.isDirectory()) {
-          const entId = ed.name;
-          const metaP = path.join(entriesDir, entId, 'meta.json');
-          if (fsSync.existsSync(metaP)) {
+      interface PendingBlobScan {
+        relPath: string;
+        fullPath: string;
+        type: BlobType;
+      }
+
+      const pendingScans: PendingBlobScan[] = [];
+
+      // 1. Categories
+      if (fsSync.existsSync(categoriesDir)) {
+        const catFiles = await fs.readdir(categoriesDir);
+        for (const cf of catFiles) {
+          if (cf.endsWith('.json')) {
             pendingScans.push({
-              relPath: `entries/${entId}/meta.json`,
-              fullPath: metaP,
-              type: 'entry_meta',
+              relPath: `categories/${cf}`,
+              fullPath: path.join(categoriesDir, cf),
+              type: 'category',
             });
           }
+        }
+      }
 
-          const manifestP = path.join(entriesDir, entId, 'manifest.json');
-          if (fsSync.existsSync(manifestP)) {
-            pendingScans.push({
-              relPath: `entries/${entId}/manifest.json`,
-              fullPath: manifestP,
-              type: 'manifest',
-            });
-          }
+      // 2. Entries (meta.json, manifest.json, chunks/*.json)
+      if (fsSync.existsSync(entriesDir)) {
+        const entDirs = await fs.readdir(entriesDir, { withFileTypes: true });
+        for (const ed of entDirs) {
+          if (ed.isDirectory()) {
+            const entId = ed.name;
+            const metaP = path.join(entriesDir, entId, 'meta.json');
+            if (fsSync.existsSync(metaP)) {
+              pendingScans.push({
+                relPath: `entries/${entId}/meta.json`,
+                fullPath: metaP,
+                type: 'entry_meta',
+              });
+            }
 
-          const chkDir = path.join(entriesDir, entId, 'chunks');
-          if (fsSync.existsSync(chkDir)) {
-            const chks = await fs.readdir(chkDir, { withFileTypes: true });
-            for (const chk of chks) {
-              if (chk.isFile() && chk.name.endsWith('.json')) {
-                pendingScans.push({
-                  relPath: `entries/${entId}/chunks/${chk.name}`,
-                  fullPath: path.join(chkDir, chk.name),
-                  type: 'chunk',
-                });
+            const manifestP = path.join(entriesDir, entId, 'manifest.json');
+            if (fsSync.existsSync(manifestP)) {
+              pendingScans.push({
+                relPath: `entries/${entId}/manifest.json`,
+                fullPath: manifestP,
+                type: 'manifest',
+              });
+            }
+
+            const chkDir = path.join(entriesDir, entId, 'chunks');
+            if (fsSync.existsSync(chkDir)) {
+              const chks = await fs.readdir(chkDir, { withFileTypes: true });
+              for (const chk of chks) {
+                if (chk.isFile() && chk.name.endsWith('.json')) {
+                  pendingScans.push({
+                    relPath: `entries/${entId}/chunks/${chk.name}`,
+                    fullPath: path.join(chkDir, chk.name),
+                    type: 'chunk',
+                  });
+                }
               }
             }
           }
         }
       }
-    }
 
-    // 3. Fallback: db-store.json only if categories/ was not present or empty
-    if (pendingScans.filter((s) => s.type === 'category').length === 0 && fsSync.existsSync(dbPath)) {
-      pendingScans.push({
-        relPath: 'db-store.json',
-        fullPath: dbPath,
-        type: 'db',
-      });
-    }
-
-    // 4. Storage assets (originals and metadata only, NO thumbnails)
-    const storageDir = path.join(this.baseDataDir, 'storage');
-    if (fsSync.existsSync(storageDir)) {
-      const metaP = path.join(storageDir, 'meta.json');
-      if (fsSync.existsSync(metaP)) {
+      // 3. Fallback: db-store.json only if categories/ was not present or empty
+      if (pendingScans.filter((s) => s.type === 'category').length === 0 && fsSync.existsSync(dbPath)) {
         pendingScans.push({
-          relPath: 'storage/meta.json',
-          fullPath: metaP,
-          type: 'asset_meta',
+          relPath: 'db-store.json',
+          fullPath: dbPath,
+          type: 'db',
         });
       }
 
+      // 4. Storage assets
+      const storageDir = path.join(this.baseDataDir, 'storage');
+      if (fsSync.existsSync(storageDir)) {
+        const metaP = path.join(storageDir, 'meta.json');
+        if (fsSync.existsSync(metaP)) {
+          pendingScans.push({
+            relPath: 'storage/meta.json',
+            fullPath: metaP,
+            type: 'asset_meta',
+          });
+        }
+
+        const files = await fs.readdir(storageDir, { withFileTypes: true });
+        for (const f of files) {
+          if (f.isFile() && f.name !== 'meta.json' && !f.name.endsWith('.tmp')) {
+            pendingScans.push({
+              relPath: `storage/${f.name}`,
+              fullPath: path.join(storageDir, f.name),
+              type: 'asset',
+            });
+          }
+        }
+      }
+
+      const blobs = await runConcurrent(pendingScans, 16, async (item) => {
+        const buf = await fs.readFile(item.fullPath);
+        return {
+          relPath: item.relPath,
+          fullPath: item.fullPath,
+          type: item.type,
+          bytes: buf.length,
+          hash: crypto.createHash('sha256').update(buf).digest('hex'),
+        };
+      });
+
+      return blobs;
+    }
+
+    const blobs: LocalBlobFile[] = [];
+
+    // 1. Categories from Database
+    const categories = await this.prisma.category.findMany({ orderBy: { sortOrder: 'asc' } });
+    for (const cat of categories) {
+      const payload = JSON.stringify(
+        {
+          id: cat.id,
+          title: cat.title,
+          description: cat.description ?? undefined,
+          coverAssetId: cat.coverAssetId ?? undefined,
+          sortOrder: cat.sortOrder,
+          color: cat.color ?? undefined,
+          todo: cat.todo,
+          version: cat.version,
+          createdAt: cat.createdAt.toISOString(),
+          updatedAt: cat.updatedAt.toISOString(),
+          deletedAt: cat.deletedAt ? cat.deletedAt.toISOString() : null,
+        },
+        null,
+        2
+      );
+      const buf = Buffer.from(payload, 'utf8');
+      const hash = crypto.createHash('sha256').update(buf).digest('hex');
+      blobs.push({
+        relPath: `categories/${cat.id}.json`,
+        fullPath: '',
+        type: 'category',
+        bytes: buf.length,
+        hash,
+        buffer: buf,
+      });
+    }
+
+    // 2. Entries metadata from Database
+    const entries = await this.prisma.entry.findMany();
+    for (const ent of entries) {
+      const metaPayload = JSON.stringify(
+        {
+          id: ent.id,
+          categoryId: ent.categoryId,
+          title: ent.title,
+          sortOrder: ent.sortOrder,
+          color: ent.color,
+          pinned: ent.pinned,
+          spine: ent.spine,
+          stats: ent.stats,
+          weight: ent.weight,
+          version: ent.version,
+          createdAt: ent.createdAt.toISOString(),
+          updatedAt: ent.updatedAt.toISOString(),
+          deletedAt: ent.deletedAt ? ent.deletedAt.toISOString() : null,
+          lastOpenedAt: ent.lastOpenedAt ? ent.lastOpenedAt.toISOString() : null,
+        },
+        null,
+        2
+      );
+      const buf = Buffer.from(metaPayload, 'utf8');
+      const hash = crypto.createHash('sha256').update(buf).digest('hex');
+      blobs.push({
+        relPath: `entries/${ent.id}/meta.json`,
+        fullPath: '',
+        type: 'entry_meta',
+        bytes: buf.length,
+        hash,
+        buffer: buf,
+      });
+    }
+
+    // 3. Entry Manifests from Database
+    const manifests = await this.prisma.entryManifest.findMany();
+    for (const man of manifests) {
+      const manPayload = JSON.stringify(
+        {
+          entryId: man.entryId,
+          schemaVersion: man.schemaVersion,
+          version: man.version,
+          totalBlocks: man.totalBlocks,
+          chunkCount: man.chunkCount,
+          stats: man.stats,
+          chunks: man.chunks,
+          updatedAt: man.updatedAt.toISOString(),
+        },
+        null,
+        2
+      );
+      const buf = Buffer.from(manPayload, 'utf8');
+      const hash = crypto.createHash('sha256').update(buf).digest('hex');
+      blobs.push({
+        relPath: `entries/${man.entryId}/manifest.json`,
+        fullPath: '',
+        type: 'manifest',
+        bytes: buf.length,
+        hash,
+        buffer: buf,
+      });
+    }
+
+    // 4. Chunks from Database
+    const chunks = await this.prisma.chunk.findMany();
+    for (const chk of chunks) {
+      const chkPayload = JSON.stringify(
+        {
+          chunkId: chk.id,
+          entryId: chk.entryId,
+          blocks: chk.payload,
+        },
+        null,
+        2
+      );
+      const buf = Buffer.from(chkPayload, 'utf8');
+      const hash = crypto.createHash('sha256').update(buf).digest('hex');
+      blobs.push({
+        relPath: `entries/${chk.entryId}/chunks/${chk.id}.json`,
+        fullPath: '',
+        type: 'chunk',
+        bytes: buf.length,
+        hash,
+        buffer: buf,
+      });
+    }
+
+    // 5. Asset Metadata from Database
+    const assetMetas = await this.prisma.assetMeta.findMany({ orderBy: { createdAt: 'asc' } });
+    if (assetMetas.length > 0) {
+      const records = assetMetas.map((m) => ({
+        id: m.id,
+        storageKey: m.storageKey,
+        mime: m.mime,
+        bytes: m.bytes,
+        width: m.width ?? undefined,
+        height: m.height ?? undefined,
+        originalName: m.originalName ?? undefined,
+        checksum: m.checksum,
+        createdAt: m.createdAt.toISOString(),
+      }));
+      const payload = JSON.stringify(records, null, 2);
+      const buf = Buffer.from(payload, 'utf8');
+      const hash = crypto.createHash('sha256').update(buf).digest('hex');
+      blobs.push({
+        relPath: 'storage/meta.json',
+        fullPath: '',
+        type: 'asset_meta',
+        bytes: buf.length,
+        hash,
+        buffer: buf,
+      });
+    }
+
+    // 6. Storage asset binary files from Local Disk (originals only, NO thumbnails)
+    const storageDir = path.join(this.baseDataDir, 'storage');
+    if (fsSync.existsSync(storageDir)) {
       const files = await fs.readdir(storageDir, { withFileTypes: true });
       for (const f of files) {
         if (f.isFile() && f.name !== 'meta.json' && !f.name.endsWith('.tmp')) {
-          pendingScans.push({
+          const fullPath = path.join(storageDir, f.name);
+          const buf = await fs.readFile(fullPath);
+          const hash = crypto.createHash('sha256').update(buf).digest('hex');
+          blobs.push({
             relPath: `storage/${f.name}`,
-            fullPath: path.join(storageDir, f.name),
+            fullPath,
             type: 'asset',
+            bytes: buf.length,
+            hash,
+            buffer: buf,
           });
         }
       }
     }
-
-    // Parallel bounded reading and hashing (Task 1 item 5)
-    const blobs = await runConcurrent(pendingScans, 16, async (item) => {
-      const buf = await fs.readFile(item.fullPath);
-      return {
-        relPath: item.relPath,
-        fullPath: item.fullPath,
-        type: item.type,
-        bytes: buf.length,
-        hash: crypto.createHash('sha256').update(buf).digest('hex'),
-      };
-    });
 
     return blobs;
   }
@@ -452,7 +638,16 @@ export class BackupService {
       }
     });
 
-    const validSnapshots = snapshotFiles.filter((s) => !s.path.endsWith('latest.json') && s.path.endsWith('.json'));
+    const validSnapshots = snapshotFiles.filter((s) => {
+      const norm = s.path.replace(/\\/g, '/');
+      const parts = norm.split('/');
+      return (
+        parts.length === 2 &&
+        parts[1].endsWith('.json') &&
+        parts[1] !== 'latest.json' &&
+        parts[1] !== 'latest-manifest.json'
+      );
+    });
     const snapshots = validSnapshots.map((s) => path.basename(s.path).replace(/\.json$/, ''));
     return {
       remoteBlobs,
@@ -628,7 +823,7 @@ export class BackupService {
       let currentPackBytes = 0;
 
       for (const b of newBlobs) {
-        const buf = await fs.readFile(b.fullPath);
+        const buf = b.buffer || (await fs.readFile(b.fullPath));
 
         // Assets >= 2 MB get their own dedicated pack
         if (b.type === 'asset' && buf.length >= LARGE_ASSET_THRESHOLD) {

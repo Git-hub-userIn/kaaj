@@ -21,6 +21,7 @@ const LazyEntryEditor = React.lazy(() =>
 
 export const App: React.FC = () => {
   const [currentPath, setCurrentPath] = useState<string>(() => window.location.pathname);
+  const isTestMode = (import.meta.env as any).APP_MODE === 'test';
 
   useEffect(() => {
     const handlePopState = () => {
@@ -36,34 +37,66 @@ export const App: React.FC = () => {
     setCurrentPath(to.split('?')[0]);
   };
 
-  // Route: /category/:id
-  const categoryMatch = currentPath.match(/^\/category\/([^/]+)/);
-  if (categoryMatch) {
-    const categoryId = categoryMatch[1];
-    return (
-      <CategoryStackScreen
-        categoryId={categoryId}
-        onNavigateHome={() => navigate('/')}
-        onNavigateToEntry={(entryId) => navigate(`/entry/${entryId}`)}
-      />
-    );
-  }
-
-  // Route: /entry/:id
-  const entryMatch = currentPath.match(/^\/entry\/([^/]+)/);
-  if (entryMatch) {
-    const entryId = entryMatch[1];
-    return (
-      <Suspense fallback={<div style={{ padding: '32px', textAlign: 'center', fontFamily: 'serif' }}>Loading entry...</div>}>
-        <LazyEntryEditor
-          entryId={entryId}
-          onNavigateBack={() => window.history.back()}
-          onNavigateToCategory={(catId) => navigate(`/category/${catId}`)}
+  const renderContent = () => {
+    // Route: /category/:id
+    const categoryMatch = currentPath.match(/^\/category\/([^/]+)/);
+    if (categoryMatch) {
+      const categoryId = categoryMatch[1];
+      return (
+        <CategoryStackScreen
+          categoryId={categoryId}
+          onNavigateHome={() => navigate('/')}
+          onNavigateToEntry={(entryId) => navigate(`/entry/${entryId}`)}
         />
-      </Suspense>
-    );
-  }
+      );
+    }
 
-  // Default Route: / (Home Screen: Catalogues)
-  return <HomeScreen onNavigateToCategory={(id) => navigate(`/category/${id}`)} />;
+    // Route: /entry/:id
+    const entryMatch = currentPath.match(/^\/entry\/([^/]+)/);
+    if (entryMatch) {
+      const entryId = entryMatch[1];
+      return (
+        <Suspense fallback={<div style={{ padding: '32px', textAlign: 'center', fontFamily: 'serif' }}>Loading entry...</div>}>
+          <LazyEntryEditor
+            entryId={entryId}
+            onNavigateBack={() => window.history.back()}
+            onNavigateToCategory={(catId) => navigate(`/category/${catId}`)}
+          />
+        </Suspense>
+      );
+    }
+
+    // Default Route: / (Home Screen: Catalogues)
+    return <HomeScreen onNavigateToCategory={(id) => navigate(`/category/${id}`)} />;
+  };
+
+  return (
+    <>
+      {isTestMode && (
+        <div
+          data-testid="test-badge"
+          style={{
+            position: 'fixed',
+            top: 12,
+            right: 12,
+            zIndex: 99999,
+            backgroundColor: '#b91c1c',
+            color: '#ffffff',
+            padding: '4px 10px',
+            borderRadius: '6px',
+            fontSize: '11px',
+            fontWeight: 700,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+            pointerEvents: 'none',
+            border: '1px solid rgba(255,255,255,0.3)',
+          }}
+        >
+          TEST
+        </div>
+      )}
+      {renderContent()}
+    </>
+  );
 };

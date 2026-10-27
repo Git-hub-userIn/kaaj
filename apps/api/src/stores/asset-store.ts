@@ -3,6 +3,8 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import sharp from 'sharp';
+import type { PrismaClient } from '../generated/client/index.js';
+import { prisma as defaultPrisma } from '../db/client.js';
 
 export interface AssetRecord {
   id: string;
@@ -22,51 +24,27 @@ export interface AssetStore {
   getThumb(id: string, size: '320' | '960'): Promise<Buffer | null>;
   delete(storageKey: string): Promise<void>;
   exists(storageKey: string): Promise<boolean>;
+  getRecord(id: string): Promise<AssetRecord | null>;
+  getAllRecords(): Promise<AssetRecord[]>;
 }
 
 export class LocalDiskAssetStore implements AssetStore {
   private baseDir: string;
   private thumbsDir: string;
-  private metaMap: Map<string, AssetRecord> = new Map();
-
-  private metaFile: string;
+  private prisma: PrismaClient;
   private initialized = false;
 
-  constructor(baseDir: string) {
+  constructor(baseDir: string, prismaClient?: PrismaClient) {
     this.baseDir = baseDir;
     this.thumbsDir = path.join(baseDir, 'thumbs');
-    this.metaFile = path.join(baseDir, 'meta.json');
+    this.prisma = prismaClient || defaultPrisma;
   }
 
   async init(): Promise<void> {
     if (this.initialized) return;
     await fs.mkdir(this.baseDir, { recursive: true });
     await fs.mkdir(this.thumbsDir, { recursive: true });
-    try {
-      const raw = await fs.readFile(this.metaFile, 'utf8');
-      const records = JSON.parse(raw);
-      if (Array.isArray(records)) {
-        for (const record of records) {
-          if (record && record.id) {
-            this.metaMap.set(record.id, record);
-          }
-        }
-      }
-    } catch {
-      // meta.json may not exist yet
-    }
     this.initialized = true;
-  }
-
-  private async persistMeta(): Promise<void> {
-    try {
-      const records = Array.from(this.metaMap.values());
-      const tmpPath = `${this.metaFile}.tmp`;
-      await fs.writeFile(tmpPath, JSON.stringify(records, null, 2), 'utf8');
-      await fs.rename(tmpPath, this.metaFile);
-    } catch (err) {
-      console.warn('Failed to persist asset meta.json:', err);
-    }
   }
 
   async put(buffer: Buffer, mime: string, originalName?: string): Promise<{ asset: AssetRecord; thumb320: Buffer; thumb960: Buffer }> {
@@ -115,8 +93,31 @@ export class LocalDiskAssetStore implements AssetStore {
       createdAt: new Date().toISOString(),
     };
 
-    this.metaMap.set(id, asset);
-    await this.persistMeta();
+    // Store metadata in PostgreSQL
+    await this.prisma.assetMeta.upsert({
+      where: { id },
+      create: {
+        id: asset.id,
+        storageKey: asset.storageKey,
+        mime: asset.mime,
+        bytes: asset.bytes,
+        width: asset.width ?? null,
+        height: asset.height ?? null,
+        originalName: asset.originalName ?? null,
+        checksum: asset.checksum,
+        createdAt: new Date(asset.createdAt),
+      },
+      update: {
+        storageKey: asset.storageKey,
+        mime: asset.mime,
+        bytes: asset.bytes,
+        width: asset.width ?? null,
+        height: asset.height ?? null,
+        originalName: asset.originalName ?? null,
+        checksum: asset.checksum,
+      },
+    });
+
     return { asset, thumb320, thumb960 };
   }
 
@@ -136,7 +137,7 @@ export class LocalDiskAssetStore implements AssetStore {
         return await fs.readFile(filePath);
       } catch {
         // On-demand generation if thumbnail is missing on disk
-        const record = this.getRecord(id);
+        const record = await this.getRecord(id);
         if (!record) return null;
         const orig = await this.get(record.storageKey);
         if (!orig) return null;
@@ -153,6 +154,9 @@ export class LocalDiskAssetStore implements AssetStore {
   async delete(storageKey: string): Promise<void> {
     const filePath = path.join(this.baseDir, storageKey);
     await fs.unlink(filePath).catch(() => {});
+    await this.prisma.assetMeta.deleteMany({
+      where: { storageKey },
+    }).catch(() => {});
   }
 
   async exists(storageKey: string): Promise<boolean> {
@@ -164,9 +168,27 @@ export class LocalDiskAssetStore implements AssetStore {
     }
   }
 
-  getRecord(id: string): AssetRecord | undefined {
-    const existing = this.metaMap.get(id);
-    if (existing) return existing;
+  async getRecord(id: string): Promise<AssetRecord | null> {
+    try {
+      const meta = await this.prisma.assetMeta.findUnique({
+        where: { id },
+      });
+      if (meta) {
+        return {
+          id: meta.id,
+          storageKey: meta.storageKey,
+          mime: meta.mime,
+          bytes: meta.bytes,
+          width: meta.width ?? undefined,
+          height: meta.height ?? undefined,
+          originalName: meta.originalName ?? undefined,
+          checksum: meta.checksum,
+          createdAt: meta.createdAt.toISOString(),
+        };
+      }
+    } catch {
+      // ignore db errors in fallback
+    }
 
     for (const ext of ['png', 'jpg', 'webp', 'gif']) {
       const storageKey = `${id}.${ext}`;
@@ -175,7 +197,7 @@ export class LocalDiskAssetStore implements AssetStore {
         if (fsSync.existsSync(filePath)) {
           const mime = ext === 'png' ? 'image/png' : ext === 'jpg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/gif';
           const stat = fsSync.statSync(filePath);
-          const recovered: AssetRecord = {
+          return {
             id,
             storageKey,
             mime,
@@ -183,13 +205,28 @@ export class LocalDiskAssetStore implements AssetStore {
             checksum: '',
             createdAt: stat.birthtime.toISOString(),
           };
-          this.metaMap.set(id, recovered);
-          return recovered;
         }
       } catch {
         // ignore
       }
     }
-    return undefined;
+    return null;
+  }
+
+  async getAllRecords(): Promise<AssetRecord[]> {
+    const metas = await this.prisma.assetMeta.findMany({
+      orderBy: { createdAt: 'asc' },
+    });
+    return metas.map((meta) => ({
+      id: meta.id,
+      storageKey: meta.storageKey,
+      mime: meta.mime,
+      bytes: meta.bytes,
+      width: meta.width ?? undefined,
+      height: meta.height ?? undefined,
+      originalName: meta.originalName ?? undefined,
+      checksum: meta.checksum,
+      createdAt: meta.createdAt.toISOString(),
+    }));
   }
 }

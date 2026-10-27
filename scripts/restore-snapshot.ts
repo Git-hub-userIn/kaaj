@@ -39,10 +39,15 @@ function getSharpInstance() {
   }
 }
 
+import { importFilesToPostgres } from './db-import-files.js';
+import { getPrismaClient, closeDb } from '../apps/api/src/db/client.js';
+
 export interface RestoreOptions {
   snapshotId?: string; // Default: 'latest'
   force?: boolean;
   concurrency?: number; // Default: from BACKUP_CONCURRENCY or 4
+  restoreToDb?: boolean;
+  targetDbUrl?: string;
 }
 
 export interface RestoreResult {
@@ -381,6 +386,22 @@ async function loadEntryDocFromDir(entryDir: string): Promise<DocumentEnvelopeV2
       await regenerateThumbnailsForAsset(originalPath, asset.id, thumbsDir);
       regeneratedThumbnails += 2; // 320px + 960px
     }
+  }
+
+  // 8. Restore into database if requested
+  if (options.restoreToDb || options.targetDbUrl) {
+    const prisma = getPrismaClient(options.targetDbUrl);
+    const existingCats = await prisma.category.count();
+    const existingEntries = await prisma.entry.count();
+    if ((existingCats > 0 || existingEntries > 0) && !options.force) {
+      throw new Error('Refusing to restore into non-empty database without --force flag.');
+    }
+    if (options.force && (existingCats > 0 || existingEntries > 0)) {
+      await prisma.entry.deleteMany({});
+      await prisma.category.deleteMany({});
+      await prisma.assetMeta.deleteMany({});
+    }
+    await importFilesToPostgres({ dataDirectory: destinationDir, targetDbUrl: options.targetDbUrl });
   }
 
   return {

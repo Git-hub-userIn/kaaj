@@ -16,12 +16,28 @@
     "build": "bun run --filter \"*\" build",
     "test:e2e": "bun --filter @kaaj/e2e test",
     "typecheck": "bun run --filter \"*\" typecheck",
+    "prisma": "prisma",
+    "db:create": "bun scripts/db-create.ts",
+    "db:migrate": "bun scripts/db-migrate.ts",
+    "db:reset": "bun scripts/db-reset.ts",
+    "db:seed": "bun scripts/db-seed.ts",
+    "db:seed:big": "bun scripts/db-seed-big.ts",
+    "db:studio": "bun scripts/db-studio.ts",
+    "db:import-files": "bun scripts/db-import-files.ts",
     "backup:prune": "bun scripts/prune-backup.ts",
     "backup:check": "bun scripts/check-backup.ts",
     "backup:restore": "bun scripts/restore-snapshot.ts",
     "backup:verify-restore": "bun scripts/verify-restore.ts"
   },
   "devDependencies": {
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "@prisma/client-runtime-utils": "7.10.1",
+    "@types/pg": "8.11.11",
+    "dotenv": "17.4.2",
+    "pg": "8.13.3",
+    "prisma": "7.10.1",
+    "sharp": "^0.33.5",
     "typescript": "^5.7.3"
   },
   "dependencies": {
