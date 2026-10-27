@@ -18,7 +18,8 @@
     "typecheck": "bun run --filter \"*\" typecheck",
     "backup:prune": "bun scripts/prune-backup.ts",
     "backup:check": "bun scripts/check-backup.ts",
-    "backup:restore": "bun scripts/restore-snapshot.ts"
+    "backup:restore": "bun scripts/restore-snapshot.ts",
+    "backup:verify-restore": "bun scripts/verify-restore.ts"
   },
   "devDependencies": {
     "typescript": "^5.7.3"

@@ -2,6 +2,8 @@ export interface BackupFileRecord {
   path: string;
   bytes: number;
   checksum: string; // sha256 hex
+  md5Checksum?: string;
+  httpRequestsCount?: number;
   updatedAt: string;
 }
 

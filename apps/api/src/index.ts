@@ -497,34 +497,25 @@ app.get('/backup/maintenance', async (c) => {
 });
 
 app.post('/backup/trigger', async (c) => {
+  const wait = c.req.query('wait') === 'true';
+  if (!wait) {
+    const triggerRes = backupService.triggerAsyncBackup();
+    return c.json(triggerRes, 202);
+  }
+
+  // When wait=true is requested, await completion and return only the summary (never full manifest)
   try {
-    const isAsync = c.req.query('wait') !== 'true';
-    if (isAsync) {
-      if (backupService.getStatus().status === 'running') {
-        return c.json({ status: 'already_running' });
-      }
-      // Trigger asynchronously in background without blocking
-      backupService.createSnapshot().catch((err) => {
-        console.warn('Background backup snapshot notice:', err.message || err);
-      });
-      return c.json({ status: 'triggered' });
-    }
-
-    if (backupService.getStatus().status === 'running') {
-      return c.json({
-        error: 'A backup snapshot is already in progress.',
-        ...backupService.getStatus(),
-      }, 409);
-    }
-
-    const result = await backupService.createSnapshot();
+    const job = await backupService.createSnapshot();
     return c.json({
       success: true,
-      snapshotId: result.snapshotId,
-      uploadedPacks: result.uploadedPacks,
-      newBlobsCount: result.newBlobsCount,
-      skippedBlobsCount: result.skippedBlobsCount,
-      manifest: result.manifest,
+      snapshotId: job.snapshotId,
+      status: job.status,
+      uploadedPacks: job.uploadedPacks,
+      newBlobsCount: job.newBlobsCount,
+      skippedBlobsCount: job.skippedBlobsCount,
+      totalFiles: job.totalFiles,
+      totalBytes: job.totalBytes,
+      timings: job.timings,
     });
   } catch (err: any) {
     return c.json({ error: err.message || 'Backup failed' }, 500);

@@ -895,7 +895,64 @@ export class CategoriesService {
       console.warn('Initial chunk migration notice:', migErr);
     }
 
+    // Ensure split category and entry metadata files exist for granular backups
+    try {
+      await this.exportMetadataFiles();
+    } catch (exportErr) {
+      console.warn('Metadata split files export notice:', exportErr);
+    }
+
     this.initialized = true;
+  }
+
+  async exportMetadataFiles(): Promise<void> {
+    const categoriesDir = path.join(this.baseDataDir, 'categories');
+    const entriesDir = path.join(this.baseDataDir, 'entries');
+    await fs.mkdir(categoriesDir, { recursive: true });
+    await fs.mkdir(entriesDir, { recursive: true });
+
+    // 1. Write category files
+    for (const cat of this.categories.values()) {
+      const catPath = path.join(categoriesDir, `${cat.id}.json`);
+      const payload = {
+        id: cat.id,
+        title: cat.title,
+        description: cat.description,
+        color: cat.color,
+        sortOrder: cat.sortOrder,
+        coverAssetId: cat.coverAssetId,
+        todo: cat.todo,
+        version: cat.version,
+        createdAt: (cat as any).createdAt,
+        updatedAt: (cat as any).updatedAt,
+        deletedAt: cat.deletedAt,
+      };
+      await fs.writeFile(catPath, JSON.stringify(payload, null, 2), 'utf8');
+    }
+
+    // 2. Write entry meta files (excluding heavy doc object)
+    for (const ent of this.entries.values()) {
+      const entMetaDir = path.join(entriesDir, ent.id);
+      await fs.mkdir(entMetaDir, { recursive: true });
+      const metaPath = path.join(entMetaDir, 'meta.json');
+      const metaPayload = {
+        id: ent.id,
+        categoryId: ent.categoryId,
+        title: ent.title,
+        sortOrder: ent.sortOrder,
+        color: ent.color,
+        pinned: ent.pinned,
+        spine: ent.spine,
+        stats: ent.stats,
+        weight: ent.weight,
+        version: ent.version,
+        createdAt: ent.createdAt,
+        updatedAt: ent.updatedAt,
+        deletedAt: ent.deletedAt,
+        lastOpenedAt: ent.lastOpenedAt,
+      };
+      await fs.writeFile(metaPath, JSON.stringify(metaPayload, null, 2), 'utf8');
+    }
   }
 
   private async persist(): Promise<void> {
@@ -906,6 +963,7 @@ export class CategoriesService {
     const tmpPath = `${this.dataFilePath}.tmp`;
     await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8');
     await fs.rename(tmpPath, this.dataFilePath);
+    await this.exportMetadataFiles().catch(() => {});
   }
 
   private async seed(): Promise<void> {

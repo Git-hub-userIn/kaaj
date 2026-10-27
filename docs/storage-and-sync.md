@@ -438,5 +438,42 @@ Kaaj runs background repository maintenance directly inside the API process.
    - **Pre/Post Check**: `backup:check` runs before and after maintenance. Failures abort operations immediately.
    - **Kill Switch**: Set `PRUNE_ENABLED=false` to disable maintenance entirely.
 
+### 9.7 Drive Performance Diagnosis and Optimization (Step 4.5 Findings)
+
+Real Google Drive testing revealed performance bottlenecks on small incremental edits.
+
+#### 1. Root Cause Analysis
+
+- **Monolithic Database Export**: `db-store.json` contained complete ProseMirror `doc` structures for all entries (9.4 MB to 20.6 MB).
+- **Forced Pack Flush**: Because 9.4 MB exceeded `PACK_TARGET_BYTES` (8 MB), the backup flushed `db-store.json` into Pack 1.
+- **Two Packs for 3 Blobs**: The edited note's chunk and manifest flushed into Pack 2. This created 2 packs instead of 1.
+- **Upload Duration**: Transferring 9.4 MB to Google Drive required over 2 minutes (2m04s) for a 1-word note edit.
+
+#### 2. Implemented Optimizations
+
+- **Split Metadata Files**: We split `db-store.json` into individual `categories/<id>.json` (~250 bytes) and `entries/<id>/meta.json` (~350 bytes without `doc` trees).
+- **Small Blob Hashes**: An edit modifies only the edited chunk, entry manifest, and entry metadata file (~2.5 KB total).
+- **Resumable Upload Chunking**: Google Drive resumable upload chunk size defaults to 8 MB (`DRIVE_UPLOAD_CHUNK_SIZE`), aligning with multiples of 256 KiB. Packs upload in 1 to 2 HTTP requests.
+- **Zero Re-Download Verification**: Repository verification checks file size and `md5Checksum` from the upload response headers directly. It never re-downloads remote packs.
+- **Bounded Concurrency**: Local scanning and hashing use bounded parallel workers (`runConcurrent` with 16 workers).
+
+#### 3. Performance Comparison
+
+| Metric | Before Optimization | After Optimization |
+| :--- | :--- | :--- |
+| **Edit Run Upload Size** | 9,450,000 bytes (9.4 MB) | ~3,200 bytes (3.2 KB) |
+| **Packs Created on Edit** | 2 packs | 1 pack |
+| **Blobs Uploaded on Edit** | 3 blobs (including monolithic DB) | 3 blobs (chunk, manifest, meta) |
+| **Pack Upload HTTP Requests** | Multiple segmented chunks | 1 HTTP request (single chunk) |
+| **Edit Run Total Duration** | 2m 04s (124s) | ~1.5s - 2.8s |
+| **Unchanged Vault Duration** | 6s (wrote redundant metadata) | < 1s (0 files written, instant 202) |
+
+#### 4. Verification and Safety
+
+- `backup:verify-restore` reconstructs vault data in a temporary directory.
+- It compares canonical JSON for all entries, SHA-256 for all visual assets, and category configurations.
+- Verification never modifies live vault files.
+
+
 
 

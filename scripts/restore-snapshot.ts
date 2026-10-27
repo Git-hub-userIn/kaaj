@@ -12,6 +12,11 @@ import {
   type BlobIndexRecord,
   runConcurrent,
 } from '../apps/api/src/backup/backup-service.js';
+import {
+  reassembleDocFromChunks,
+  type DocumentEnvelopeV2,
+  type ChunkPayload,
+} from '../packages/doc-model/src/index.js';
 
 function findRepoRoot(dir = process.cwd()): string {
   let curr = path.resolve(dir);
@@ -114,18 +119,38 @@ export async function restoreSnapshot(
   let snapshotManifest: SnapshotManifestV3 | null = null;
 
   if (snapshotIdArg === 'latest') {
-    const snapFiles = await target.list('snapshots');
-    const filtered = snapFiles.filter((f) => !f.path.endsWith('latest.json') && f.path.endsWith('.json'));
-    if (filtered.length === 0) {
-      throw new Error('No snapshots found in backup repository.');
+    // 1. First try reading snapshots/latest.json
+    try {
+      const rawLatest = await target.get('snapshots/latest.json');
+      if (rawLatest) {
+        snapshotManifest = JSON.parse(rawLatest.toString('utf8'));
+      }
+    } catch {}
+
+    // 2. Fallback: filter to restic snapshot files (directly under snapshots/ and not in subdirs)
+    if (!snapshotManifest) {
+      const snapFiles = await target.list('snapshots');
+      const filtered = snapFiles.filter((f) => {
+        const norm = f.path.replace(/\\/g, '/');
+        const parts = norm.split('/');
+        return (
+          parts.length === 2 &&
+          parts[1].endsWith('.json') &&
+          parts[1] !== 'latest.json' &&
+          parts[1] !== 'latest-manifest.json'
+        );
+      });
+      if (filtered.length === 0) {
+        throw new Error('No snapshots found in backup repository.');
+      }
+      filtered.sort((a, b) => a.path.localeCompare(b.path));
+      const latestFile = filtered[filtered.length - 1];
+      const raw = await target.get(latestFile.path);
+      if (!raw) {
+        throw new Error(`Failed to read snapshot file: ${latestFile.path}`);
+      }
+      snapshotManifest = JSON.parse(raw.toString('utf8'));
     }
-    filtered.sort((a, b) => a.path.localeCompare(b.path));
-    const latestFile = filtered[filtered.length - 1];
-    const raw = await target.get(latestFile.path);
-    if (!raw) {
-      throw new Error(`Failed to read snapshot file: ${latestFile.path}`);
-    }
-    snapshotManifest = JSON.parse(raw.toString('utf8'));
   } else {
     const snapPath = snapshotIdArg.startsWith('snapshots/')
       ? snapshotIdArg
@@ -163,11 +188,19 @@ export async function restoreSnapshot(
   }
   const filesToRestore: FileRestoreTask[] = [];
 
-  // db-store.json
+  // db-store.json (legacy monolithic backup)
   if (snapshotManifest.dbExport && snapshotManifest.dbExport.blobHash) {
     filesToRestore.push({
       destRelPath: 'db-store.json',
       blobHash: snapshotManifest.dbExport.blobHash,
+    });
+  }
+
+  // Categories (granular DB export)
+  for (const cat of snapshotManifest.categories || []) {
+    filesToRestore.push({
+      destRelPath: cat.path,
+      blobHash: cat.blobHash,
     });
   }
 
@@ -179,8 +212,14 @@ export async function restoreSnapshot(
     });
   }
 
-  // Entries manifests & chunks
+  // Entries manifests, meta, & chunks
   for (const ent of Object.values(snapshotManifest.entries || {})) {
+    if (ent.metaBlobHash && ent.metaPath) {
+      filesToRestore.push({
+        destRelPath: ent.metaPath,
+        blobHash: ent.metaBlobHash,
+      });
+    }
     if (ent.manifestBlobHash) {
       filesToRestore.push({
         destRelPath: ent.manifestPath,
@@ -257,6 +296,80 @@ export async function restoreSnapshot(
       totalBytes += blobData.length;
     }
   });
+
+async function loadEntryDocFromDir(entryDir: string): Promise<DocumentEnvelopeV2 | null> {
+  const manifestPath = path.join(entryDir, 'manifest.json');
+  if (!fsSync.existsSync(manifestPath)) return null;
+
+  try {
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    const chunkFiles = Array.isArray(manifest.chunks) ? manifest.chunks : [];
+
+    const chunks: ChunkPayload[] = [];
+    for (const chkMeta of chunkFiles) {
+      const chunkFileName = chkMeta.id?.endsWith('.json') ? chkMeta.id : `${chkMeta.id}.json`;
+      const chkPath = path.join(entryDir, 'chunks', chunkFileName);
+      if (fsSync.existsSync(chkPath)) {
+        const raw = await fs.readFile(chkPath, 'utf8');
+        chunks.push(JSON.parse(raw));
+      }
+    }
+
+    if (chunks.length === 0) return null;
+    return reassembleDocFromChunks(chunks);
+  } catch {
+    return null;
+  }
+}
+
+  // Reconstruct db-store.json from restored categories and entry metadata if needed
+  const restoredDbPath = path.join(destinationDir, 'db-store.json');
+  if (!fsSync.existsSync(restoredDbPath)) {
+    try {
+      const categoriesDir = path.join(destinationDir, 'categories');
+      const categories: any[] = [];
+      if (fsSync.existsSync(categoriesDir)) {
+        const catFiles = await fs.readdir(categoriesDir);
+        for (const cf of catFiles) {
+          if (cf.endsWith('.json')) {
+            const rawCat = await fs.readFile(path.join(categoriesDir, cf), 'utf8');
+            categories.push(JSON.parse(rawCat));
+          }
+        }
+      }
+
+      const entriesDir = path.join(destinationDir, 'entries');
+      const entries: any[] = [];
+      if (fsSync.existsSync(entriesDir)) {
+        const entDirs = await fs.readdir(entriesDir, { withFileTypes: true });
+        for (const ed of entDirs) {
+          if (ed.isDirectory()) {
+            const entDir = path.join(entriesDir, ed.name);
+            const metaP = path.join(entDir, 'meta.json');
+            if (fsSync.existsSync(metaP)) {
+              const rawMeta = await fs.readFile(metaP, 'utf8');
+              const entObj = JSON.parse(rawMeta);
+              const doc = await loadEntryDocFromDir(entDir);
+              if (doc) {
+                entObj.doc = doc;
+              }
+              entries.push(entObj);
+            }
+          }
+        }
+      }
+
+      if (categories.length > 0 || entries.length > 0) {
+        await fs.writeFile(
+          restoredDbPath,
+          JSON.stringify({ categories, entries }, null, 2),
+          'utf8'
+        );
+      }
+    } catch (dbRecErr) {
+      console.warn('[RESTORE] Failed to reconstruct db-store.json from restored metadata:', dbRecErr);
+    }
+  }
 
   // 7. Regenerate WebP thumbnails
   let regeneratedThumbnails = 0;

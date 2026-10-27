@@ -13,6 +13,7 @@ import { checkBackupRepository } from '../apps/api/src/backup/backup-check.js';
 import { readPackFooter } from '../apps/api/src/backup/pack-format.js';
 import { fetchWithRetry } from '../apps/api/src/backup/drive-retry.js';
 import { GoogleDriveBackupTarget } from '../apps/api/src/backup/google-drive-backup-target.js';
+import { verifyRestore } from '../scripts/verify-restore.js';
 import {
   type DocumentEnvelopeV2,
   type TopLevelBlock,
@@ -685,9 +686,19 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
     expect(restoreResult.regeneratedThumbnails).toBeGreaterThanOrEqual(0);
 
     // 3. Verify db-store.json matches original
-    const origDb = await fs.readFile(path.join(baseDataDir, 'db-store.json'), 'utf8');
-    const restoredDb = await fs.readFile(path.join(restoreCleanDir, 'db-store.json'), 'utf8');
-    expect(JSON.parse(restoredDb)).toEqual(JSON.parse(origDb));
+    const origDb = JSON.parse(await fs.readFile(path.join(baseDataDir, 'db-store.json'), 'utf8'));
+    const restoredDb = JSON.parse(await fs.readFile(path.join(restoreCleanDir, 'db-store.json'), 'utf8'));
+    const sortById = (list: any[]) => [...list].sort((a, b) => a.id.localeCompare(b.id));
+    expect(sortById(restoredDb.categories)).toEqual(sortById(origDb.categories));
+
+    const stripDoc = (list: any[]) =>
+      sortById(
+        list.map((e) => {
+          const { doc, ...meta } = e;
+          return meta;
+        })
+      );
+    expect(stripDoc(restoredDb.entries)).toEqual(stripDoc(origDb.entries));
 
     // 4. Verify canonical document JSON equality on any existing entry
     const entriesDir = path.join(baseDataDir, 'entries');
@@ -721,5 +732,386 @@ test.describe('Kaaj Step 4 & 4.5 Suite — Hardening & Restic Pack Repository', 
 
     await fs.rm(backupDir, { recursive: true, force: true });
     await fs.rm(restoreCleanDir, { recursive: true, force: true });
+  });
+
+  // Test 13: Silent-hole bug: deleted remote pack is detected as missing, re-uploaded, and repository check passes
+  test('13. Silent-hole bug: deleted remote pack is treated as missing and healed by next backup', async () => {
+    test.setTimeout(45000);
+
+    const testRoot = path.join(repoRoot, 'data', 'test-silent-hole');
+    const sourceDir = path.join(testRoot, 'source');
+    const backupDir = path.join(testRoot, 'backup');
+    const restoreDir = path.join(testRoot, 'restore');
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.mkdir(backupDir, { recursive: true });
+    await fs.mkdir(restoreDir, { recursive: true });
+
+    // Seed test vault with one entry
+    const originalDoc: DocumentEnvelopeV2 = {
+      schemaVersion: 2,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            attrs: { id: 'blk_hole_1' },
+            content: [{ type: 'text', text: 'Healing silent holes test entry' }],
+          },
+        ],
+      },
+    };
+
+    const entDir = path.join(sourceDir, 'entries', 'ent_hole');
+    await fs.mkdir(path.join(entDir, 'chunks'), { recursive: true });
+    await fs.writeFile(path.join(sourceDir, 'db-store.json'), JSON.stringify({ v: 1, entries: {} }));
+
+    const origChunk: ChunkPayload = {
+      schemaVersion: 2,
+      chunkId: 'chunk_0',
+      entryId: 'ent_hole',
+      order: 0,
+      blocks: originalDoc.doc.content as TopLevelBlock[],
+    };
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_0.json'), JSON.stringify(origChunk));
+
+    const origManifest: EntryManifest = {
+      entryId: 'ent_hole',
+      schemaVersion: 2,
+      version: 1,
+      totalBlocks: 1,
+      chunkCount: 1,
+      chunks: [
+        {
+          id: 'chunk_0',
+          order: 0,
+          blockCount: 1,
+          bytes: Buffer.byteLength(JSON.stringify(origChunk), 'utf8'),
+          checksum: crypto.createHash('sha256').update(JSON.stringify(origChunk)).digest('hex'),
+        },
+      ],
+    };
+    await fs.writeFile(path.join(entDir, 'manifest.json'), JSON.stringify(origManifest));
+
+    const localTarget = new LocalFolderBackupTarget(backupDir);
+    const backupService = new BackupService(sourceDir, localTarget);
+
+    // Initial backup run
+    const snap1 = await backupService.createSnapshot();
+    expect(snap1.uploadedPacks).toBeGreaterThan(0);
+
+    // Verify initial check passes
+    const check1 = await checkBackupRepository(localTarget);
+    expect(check1.ok).toBe(true);
+
+    // Delete one of the remote pack files to simulate silent remote pack deletion
+    const packsBefore = await localTarget.list('packs');
+    expect(packsBefore.length).toBeGreaterThan(0);
+    const packToDelete = packsBefore[0].path;
+    await localTarget.delete(packToDelete);
+
+    // Check repository detects the missing pack
+    const checkDamaged = await checkBackupRepository(localTarget);
+    expect(checkDamaged.ok).toBe(false);
+
+    // Run next backup: should detect that the blobs in that deleted pack are missing, re-upload them, and clean up stale index references
+    const snap2 = await backupService.createSnapshot();
+    expect(snap2.uploadedPacks).toBeGreaterThan(0);
+
+    // Repository check must now pass 100%
+    const checkHealed = await checkBackupRepository(localTarget);
+    expect(checkHealed.ok).toBe(true);
+    expect(checkHealed.errors.length).toBe(0);
+
+    // Restore must recover the entry and match canonical JSON
+    const restoreRes = await restoreSnapshot(localTarget, restoreDir, { force: true });
+    expect(restoreRes.snapshotId).toBe(snap2.snapshotId);
+
+    const restoredChunk: ChunkPayload = JSON.parse(
+      await fs.readFile(path.join(restoreDir, 'entries', 'ent_hole', 'chunks', 'chunk_0.json'), 'utf8')
+    );
+    const restoredDoc = reassembleDocFromChunks([restoredChunk]);
+    expect(canonicalDocJson(restoredDoc)).toBe(canonicalDocJson(originalDoc));
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  // Test 14: Editing one entry uploads under 100 KB total and creates exactly 1 pack
+  test('14. Editing one entry uploads under 100 KB total and creates exactly 1 pack', async () => {
+    test.setTimeout(45000);
+
+    const testRoot = path.join(repoRoot, 'data', 'test-edit-upload-budget');
+    const sourceDir = path.join(testRoot, 'source');
+    const backupDir = path.join(testRoot, 'backup');
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.mkdir(backupDir, { recursive: true });
+
+    // Seed test vault with initial entry
+    const entDir = path.join(sourceDir, 'entries', 'ent_edit_budget');
+    await fs.mkdir(path.join(entDir, 'chunks'), { recursive: true });
+    await fs.writeFile(path.join(sourceDir, 'db-store.json'), JSON.stringify({ v: 1, categories: [], entries: {} }));
+
+    const initialChunk: ChunkPayload = {
+      schemaVersion: 2,
+      chunkId: 'chunk_0',
+      entryId: 'ent_edit_budget',
+      order: 0,
+      blocks: [
+        {
+          type: 'paragraph',
+          attrs: { id: 'blk_b_1' },
+          content: [{ type: 'text', text: 'Initial content for budget test' }],
+        },
+      ],
+    };
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_0.json'), JSON.stringify(initialChunk));
+    await fs.writeFile(
+      path.join(entDir, 'manifest.json'),
+      JSON.stringify({
+        entryId: 'ent_edit_budget',
+        schemaVersion: 2,
+        version: 1,
+        totalBlocks: 1,
+        chunkCount: 1,
+        chunks: [
+          {
+            id: 'chunk_0',
+            order: 0,
+            blockCount: 1,
+            bytes: Buffer.byteLength(JSON.stringify(initialChunk), 'utf8'),
+            checksum: crypto.createHash('sha256').update(JSON.stringify(initialChunk)).digest('hex'),
+          },
+        ],
+      })
+    );
+
+    const localTarget = new LocalFolderBackupTarget(backupDir);
+    const backupService = new BackupService(sourceDir, localTarget);
+
+    // Initial backup run
+    const snap1 = await backupService.createSnapshot();
+    expect(snap1.uploadedPacks).toBeGreaterThan(0);
+
+    // Record remote files after initial run
+    const packsBeforeEdit = (await localTarget.list('packs')).length;
+    const indexesBeforeEdit = (await localTarget.list('index')).length;
+    const snapshotsBeforeEdit = (await localTarget.list('snapshots')).length;
+
+    // Simulate editing one note: modify chunk_0 and manifest
+    const editedChunk: ChunkPayload = {
+      ...initialChunk,
+      blocks: [
+        {
+          type: 'paragraph',
+          attrs: { id: 'blk_b_1' },
+          content: [{ type: 'text', text: 'Edited content for budget test with a few extra words' }],
+        },
+      ],
+    };
+    await fs.writeFile(path.join(entDir, 'chunks', 'chunk_0.json'), JSON.stringify(editedChunk));
+    await fs.writeFile(
+      path.join(entDir, 'manifest.json'),
+      JSON.stringify({
+        entryId: 'ent_edit_budget',
+        schemaVersion: 2,
+        version: 2,
+        totalBlocks: 1,
+        chunkCount: 1,
+        chunks: [
+          {
+            id: 'chunk_0',
+            order: 0,
+            blockCount: 1,
+            bytes: Buffer.byteLength(JSON.stringify(editedChunk), 'utf8'),
+            checksum: crypto.createHash('sha256').update(JSON.stringify(editedChunk)).digest('hex'),
+          },
+        ],
+      })
+    );
+
+    // Run incremental backup after editing single note
+    const snap2 = await backupService.createSnapshot();
+
+    // Verify exactly 1 pack was uploaded for this edit
+    expect(snap2.uploadedPacks).toBe(1);
+
+    // Verify remote file counts increased by exactly 1 pack, 1 index, 1 snapshot
+    const packsAfterEdit = await localTarget.list('packs');
+    const indexesAfterEdit = await localTarget.list('index');
+    const snapshotsAfterEdit = await localTarget.list('snapshots');
+
+    expect(packsAfterEdit.length).toBe(packsBeforeEdit + 1);
+    expect(indexesAfterEdit.length).toBe(indexesBeforeEdit + 1);
+    expect(snapshotsAfterEdit.length).toBe(snapshotsBeforeEdit + 1);
+
+    // Calculate total bytes newly uploaded (new pack + new index + new snapshot)
+    const newPackFile = packsAfterEdit[packsAfterEdit.length - 1];
+    const newIndexFile = indexesAfterEdit[indexesAfterEdit.length - 1];
+    const newSnapshotFile = snapshotsAfterEdit.find((s) => s.path.includes(snap2.snapshotId))!;
+
+    const newPackRaw = await localTarget.get(newPackFile.path);
+    const newIndexRaw = await localTarget.get(newIndexFile.path);
+    const newSnapshotRaw = await localTarget.get(newSnapshotFile.path);
+
+    const totalUploadedBytes =
+      (newPackRaw?.length || 0) + (newIndexRaw?.length || 0) + (newSnapshotRaw?.length || 0);
+
+    // Must be well under 100 KB (typically 3-6 KB)
+    expect(totalUploadedBytes).toBeLessThan(100 * 1024);
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  // Test 15: Background job API trigger returns 202 + jobId, and unchanged vault writes NO new pack/index/snapshot
+  test('15. Background job API returns 202 + jobId and unchanged vault writes NO new files', async ({ request }) => {
+    test.setTimeout(45000);
+
+    // 1. Trigger background backup via API
+    const triggerRes = await request.post(`${API_BASE}/backup/trigger`, {
+      headers: AUTH_HEADER,
+    });
+    expect(triggerRes.status()).toBe(202);
+    const triggerBody = await triggerRes.json();
+    expect(triggerBody.jobId).toBeTruthy();
+    expect(['running', 'already_running']).toContain(triggerBody.status);
+
+    // 2. Poll /backup/status until backup completes
+    let statusBody: any = null;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const statusRes = await request.get(`${API_BASE}/backup/status`, {
+        headers: AUTH_HEADER,
+      });
+      expect(statusRes.ok()).toBeTruthy();
+      statusBody = await statusRes.json();
+      if (statusBody.status === 'idle') break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(statusBody.status).toBe('idle');
+
+    // 3. Trigger backup with wait=true on unchanged vault: returns summary only (never full manifest)
+    const syncRes = await request.post(`${API_BASE}/backup/trigger?wait=true`, {
+      headers: AUTH_HEADER,
+    });
+    expect(syncRes.ok()).toBeTruthy();
+    const syncBody = await syncRes.json();
+    expect(syncBody.success).toBe(true);
+    expect(syncBody.status).toBe('unchanged');
+    expect(syncBody.uploadedPacks).toBe(0);
+    expect(syncBody.newBlobsCount).toBe(0);
+    // Ensure full manifest is NOT leaked in the response payload
+    expect(syncBody.manifest).toBeUndefined();
+
+    // 4. Verify unchanged vault produces zero new files on target
+    const targetDir = path.resolve(baseDataDir, 'backup-snapshots');
+    if (fsSync.existsSync(targetDir)) {
+      const localTarget = new LocalFolderBackupTarget(targetDir);
+      const packsBefore = (await localTarget.list('packs')).length;
+      const indexBefore = (await localTarget.list('index')).length;
+      const snapsBefore = (await localTarget.list('snapshots')).length;
+
+      const runAgain = await request.post(`${API_BASE}/backup/trigger?wait=true`, {
+        headers: AUTH_HEADER,
+      });
+      expect(runAgain.ok()).toBeTruthy();
+      const runAgainBody = await runAgain.json();
+      expect(runAgainBody.status).toBe('unchanged');
+
+      const packsAfter = (await localTarget.list('packs')).length;
+      const indexAfter = (await localTarget.list('index')).length;
+      const snapsAfter = (await localTarget.list('snapshots')).length;
+
+      expect(packsAfter).toBe(packsBefore);
+      expect(indexAfter).toBe(indexBefore);
+      expect(snapsAfter).toBe(snapsBefore);
+    }
+  });
+
+  // Test 16: backup:verify-restore validates entries, asset originals, and categories against live data
+  test('16. verifyRestore validates entries, asset originals, and categories against live data without modifying it', async () => {
+    test.setTimeout(45000);
+
+    const testRoot = path.join(repoRoot, 'data', 'test-verify-restore');
+    const sourceDir = path.join(testRoot, 'source');
+    const backupDir = path.join(testRoot, 'backup');
+
+    await fs.rm(testRoot, { recursive: true, force: true });
+    await fs.mkdir(path.join(sourceDir, 'categories'), { recursive: true });
+    await fs.mkdir(path.join(sourceDir, 'storage'), { recursive: true });
+    await fs.mkdir(path.join(sourceDir, 'entries', 'ent_verify_1', 'chunks'), { recursive: true });
+    await fs.mkdir(backupDir, { recursive: true });
+
+    // Seed category
+    const catData = { id: 'cat_test', title: 'Test Category', color: '#3b82f6' };
+    await fs.writeFile(path.join(sourceDir, 'categories', 'cat_test.json'), JSON.stringify(catData));
+
+    // Seed storage asset original
+    const assetData = Buffer.from(VALID_PNG_BASE64, 'base64');
+    await fs.writeFile(path.join(sourceDir, 'storage', 'asset_orig_1.png'), assetData);
+
+    // Seed entry
+    const docData: DocumentEnvelopeV2 = {
+      schemaVersion: 2,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            attrs: { id: 'blk_v_1' },
+            content: [{ type: 'text', text: 'Verified restore entry content' }],
+          },
+        ],
+      },
+    };
+    const chunkData: ChunkPayload = {
+      schemaVersion: 2,
+      chunkId: 'chunk_0',
+      entryId: 'ent_verify_1',
+      order: 0,
+      blocks: docData.doc.content as TopLevelBlock[],
+    };
+    await fs.writeFile(
+      path.join(sourceDir, 'entries', 'ent_verify_1', 'chunks', 'chunk_0.json'),
+      JSON.stringify(chunkData)
+    );
+    await fs.writeFile(
+      path.join(sourceDir, 'entries', 'ent_verify_1', 'manifest.json'),
+      JSON.stringify({
+        entryId: 'ent_verify_1',
+        schemaVersion: 2,
+        version: 1,
+        totalBlocks: 1,
+        chunkCount: 1,
+        chunks: [
+          {
+            id: 'chunk_0',
+            order: 0,
+            blockCount: 1,
+            bytes: Buffer.byteLength(JSON.stringify(chunkData), 'utf8'),
+            checksum: crypto.createHash('sha256').update(JSON.stringify(chunkData)).digest('hex'),
+          },
+        ],
+      })
+    );
+    await fs.writeFile(path.join(sourceDir, 'db-store.json'), JSON.stringify({ v: 1, categories: [catData], entries: {} }));
+
+    const localTarget = new LocalFolderBackupTarget(backupDir);
+    const backupService = new BackupService(sourceDir, localTarget);
+    await backupService.createSnapshot();
+
+    // Run verifyRestore against sourceDir
+    const result = await verifyRestore(localTarget, sourceDir);
+    expect(result.success).toBe(true);
+    expect(result.entriesCompared).toBe(1);
+    expect(result.entriesMatched).toBe(1);
+    expect(result.assetsCompared).toBe(1);
+    expect(result.assetsMatched).toBe(1);
+    expect(result.categoriesCompared).toBe(1);
+    expect(result.categoriesMatched).toBe(1);
+    expect(result.errors.length).toBe(0);
+
+    await fs.rm(testRoot, { recursive: true, force: true });
   });
 });

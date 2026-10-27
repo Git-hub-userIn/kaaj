@@ -71,6 +71,17 @@ interface StoredTokens {
   userEmail?: string;
 }
 
+export const DEFAULT_DRIVE_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB default chunk size
+export const DRIVE_CHUNK_MULTIPLE = 256 * 1024; // 256 KiB multiple required by Drive API
+
+export function getDriveUploadChunkSize(): number {
+  const envVal = Number(process.env.DRIVE_UPLOAD_CHUNK_SIZE);
+  if (envVal && !isNaN(envVal) && envVal > 0) {
+    return Math.max(DRIVE_CHUNK_MULTIPLE, Math.floor(envVal / DRIVE_CHUNK_MULTIPLE) * DRIVE_CHUNK_MULTIPLE);
+  }
+  return DEFAULT_DRIVE_CHUNK_SIZE;
+}
+
 export class GoogleDriveBackupTarget implements BackupTarget {
   readonly name = 'google-drive';
   private config: GoogleDriveConfig;
@@ -348,9 +359,13 @@ export class GoogleDriveBackupTarget implements BackupTarget {
     }
 
     // Helper to upload either via resumable (>5MB) or multipart (<=5MB)
-    const performUpload = async (targetFileId: string | null, parentId: string): Promise<string> => {
+    const performUpload = async (
+      targetFileId: string | null,
+      parentId: string
+    ): Promise<{ fileId: string; md5Checksum?: string; requestsCount: number }> => {
       if (buffer.length > 5 * 1024 * 1024) {
         // Resumable upload
+        let requestsCount = 1; // 1 for initialization
         const initUrl = targetFileId
           ? `https://www.googleapis.com/upload/drive/v3/files/${targetFileId}?uploadType=resumable`
           : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable';
@@ -376,17 +391,37 @@ export class GoogleDriveBackupTarget implements BackupTarget {
           throw new Error('Google Drive resumable upload failed to provide Location header.');
         }
 
-        const uploadRes = await fetchWithRetry(uploadUrl, {
-          method: 'PUT',
-          headers: {
-            'Content-Length': String(buffer.length),
-            'Content-Type': mimeType,
-          },
-          body: new Uint8Array(buffer),
-        });
+        const chunkSize = getDriveUploadChunkSize();
+        let offset = 0;
+        let finalFileId = targetFileId || '';
+        let finalMd5: string | undefined = undefined;
 
-        const uploadJson = await uploadRes.json().catch(() => ({}));
-        return uploadJson.id || targetFileId || '';
+        while (offset < buffer.length) {
+          const end = Math.min(offset + chunkSize, buffer.length);
+          const chunkSlice = buffer.subarray(offset, end);
+          const isLast = end === buffer.length;
+
+          requestsCount++;
+          const uploadRes = await fetchWithRetry(uploadUrl, {
+            method: 'PUT',
+            headers: {
+              'Content-Length': String(chunkSlice.length),
+              'Content-Range': `bytes ${offset}-${end - 1}/${buffer.length}`,
+              'Content-Type': mimeType,
+            },
+            body: new Uint8Array(chunkSlice),
+          });
+
+          if (isLast) {
+            const uploadJson = await uploadRes.json().catch(() => ({}));
+            finalFileId = uploadJson.id || targetFileId || '';
+            finalMd5 = uploadJson.md5Checksum;
+            break;
+          }
+          offset = end;
+        }
+
+        return { fileId: finalFileId, md5Checksum: finalMd5, requestsCount };
       }
 
       // Multipart upload
@@ -429,15 +464,22 @@ export class GoogleDriveBackupTarget implements BackupTarget {
       }
 
       const resJson = await res.json().catch(() => ({}));
-      return resJson.id || targetFileId || '';
+      return {
+        fileId: resJson.id || targetFileId || '',
+        md5Checksum: resJson.md5Checksum,
+        requestsCount: 1,
+      };
     };
 
-    let resolvedFileId = '';
+    let uploadResult: { fileId: string; md5Checksum?: string; requestsCount: number } = {
+      fileId: '',
+      requestsCount: 0,
+    };
 
     if (existingFileId) {
       try {
         // Fast path: use cached file-id directly
-        resolvedFileId = await performUpload(existingFileId, parentFolderId || '');
+        uploadResult = await performUpload(existingFileId, parentFolderId || '');
       } catch (err: any) {
         if (err.message === 'DRIVE_FILE_NOT_FOUND_404') {
           // On 404 or mismatch: clear entry and re-query once
@@ -449,7 +491,7 @@ export class GoogleDriveBackupTarget implements BackupTarget {
       }
     }
 
-    if (!resolvedFileId) {
+    if (!uploadResult.fileId) {
       // Slow path: resolve parent folder and query Drive
       if (!parentFolderId) {
         parentFolderId = await this.ensureFolder(folderPath === '.' ? '' : folderPath);
@@ -463,12 +505,12 @@ export class GoogleDriveBackupTarget implements BackupTarget {
       const searchData = await searchRes.json();
       existingFileId = searchData.files?.[0]?.id || null;
 
-      resolvedFileId = await performUpload(existingFileId, parentFolderId);
+      uploadResult = await performUpload(existingFileId, parentFolderId);
     }
 
     // Update cache with path/hash -> file id
     this.driveFileCache.set(cleanRel, {
-      fileId: resolvedFileId,
+      fileId: uploadResult.fileId,
       checksum,
       parentFolderId,
     });
@@ -478,6 +520,8 @@ export class GoogleDriveBackupTarget implements BackupTarget {
       path: cleanRel,
       bytes: buffer.length,
       checksum,
+      md5Checksum: uploadResult.md5Checksum,
+      httpRequestsCount: uploadResult.requestsCount,
       updatedAt: new Date().toISOString(),
     };
   }

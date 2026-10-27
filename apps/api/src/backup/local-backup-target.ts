@@ -24,6 +24,7 @@ export class LocalFolderBackupTarget implements BackupTarget {
 
     const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
     const checksum = crypto.createHash('sha256').update(buffer).digest('hex');
+    const md5Checksum = crypto.createHash('md5').update(buffer).digest('hex');
 
     const tmpPath = `${fullPath}.tmp`;
     await fs.writeFile(tmpPath, buffer);
@@ -33,6 +34,8 @@ export class LocalFolderBackupTarget implements BackupTarget {
       path: cleanRel.replace(/\\/g, '/'),
       bytes: buffer.length,
       checksum,
+      md5Checksum,
+      httpRequestsCount: 0,
       updatedAt: new Date().toISOString(),
     };
   }

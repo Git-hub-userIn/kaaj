@@ -8,6 +8,7 @@ import { BackupService } from '../apps/api/src/backup/backup-service.js';
 import { MaintenanceService } from '../apps/api/src/backup/maintenance-service.js';
 import { JobLock } from '../apps/api/src/backup/job-lock.js';
 import { checkBackupRepository } from '../apps/api/src/backup/backup-check.js';
+import { pruneBackups } from '../apps/api/src/backup/backup-prune.js';
 import { createPack } from '../apps/api/src/backup/pack-format.js';
 import { restoreSnapshot } from '../scripts/restore-snapshot.js';
 import {
@@ -398,5 +399,74 @@ test.describe('Task C: Automatic Maintenance & Repository Safety Suite', () => {
       await fs.readFile(path.join(restoreDir, 'entries', 'ent_compact', 'chunks', 'chunk_2.json'), 'utf8')
     );
     expect(chunk2.text).toBe('Compaction test chunk 2');
+  });
+
+  // 10. Tiered retention: keeps last 5 + 1 per day (7 days) + 1 per week (4 weeks)
+  test('10. Tiered retention keeps exact expected snapshots across calendar days and weeks', async () => {
+    const localTarget = new LocalFolderBackupTarget(backupDir);
+    const T0 = 1700000000000; // Base epoch
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    // Create snapshots across 35 days:
+    // Days 0-4 (today): 5 snapshots (all kept in "last 5")
+    // Days 1-7: 1 snapshot per day (kept in daily)
+    // Days 8-28: 1 snapshot per week (kept in weekly)
+    // Days 29-35: 1 snapshot per day (> 4 weeks old, must be purged)
+    const snapshotsToCreate: { id: string; timeMs: number }[] = [];
+
+    // 5 snapshots on today (Day 0)
+    for (let i = 0; i < 5; i++) {
+      snapshotsToCreate.push({
+        id: `snap_today_${i}`,
+        timeMs: T0 - i * 60000,
+      });
+    }
+
+    // 1 snapshot per day for days 1 to 35
+    for (let day = 1; day <= 35; day++) {
+      snapshotsToCreate.push({
+        id: `snap_day_${day}`,
+        timeMs: T0 - day * DAY_MS,
+      });
+    }
+
+    // Write dummy snapshot manifests directly to backup target
+    for (const s of snapshotsToCreate) {
+      const manifest = {
+        schemaVersion: 3,
+        snapshotId: s.id,
+        createdAt: new Date(s.timeMs).toISOString(),
+        totalFiles: 1,
+        totalBytes: 100,
+        packs: [],
+        categories: [],
+        entries: [],
+      };
+      await localTarget.put(
+        `snapshots/${s.id}.json`,
+        Buffer.from(JSON.stringify(manifest), 'utf8'),
+        'application/json'
+      );
+    }
+
+    const pruneResult = await pruneBackups(localTarget, { apply: false, nowMs: T0 });
+    // Total snapshots = 5 + 35 = 40
+    expect(pruneResult.totalSnapshots).toBe(40);
+    // Kept:
+    // - Last 5: snap_today_0..4 (5)
+    // - Daily: days 1..7 (7)
+    // - Weekly: days 8..28 (approx 3-4 week buckets not already covered)
+    // Expected retained snapshots: ~15-16, dead: ~24-25
+    expect(pruneResult.retainedSnapshots).toBeGreaterThan(12);
+    expect(pruneResult.retainedSnapshots).toBeLessThan(20);
+    expect(pruneResult.snapshotsToDelete.length).toBeGreaterThan(20);
+
+    // Verify older than 28 days (e.g. day 30, day 35) are strictly marked for deletion
+    expect(pruneResult.snapshotsToDelete.some((p) => p.endsWith('snap_day_30.json'))).toBe(true);
+    expect(pruneResult.snapshotsToDelete.some((p) => p.endsWith('snap_day_35.json'))).toBe(true);
+
+    // Verify today's snapshots and recent days (e.g. day 1, day 2) are strictly NOT in delete list
+    expect(pruneResult.snapshotsToDelete.some((p) => p.endsWith('snap_today_0.json'))).toBe(false);
+    expect(pruneResult.snapshotsToDelete.some((p) => p.endsWith('snap_day_1.json'))).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-export type BlobType = 'chunk' | 'manifest' | 'db' | 'asset' | 'asset_meta';
+export type BlobType = 'chunk' | 'manifest' | 'db' | 'category' | 'entry_meta' | 'asset' | 'asset_meta';
 
 export interface PackBlobInput {
   hash: string;

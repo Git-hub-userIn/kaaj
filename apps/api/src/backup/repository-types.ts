@@ -15,7 +15,16 @@ export interface IndexFile {
   blobs: BlobIndexRecord[];
 }
 
+export interface SnapshotCategoryRef {
+  id: string;
+  path: string;
+  blobHash: string;
+  bytes: number;
+}
+
 export interface SnapshotEntryRef {
+  metaBlobHash?: string;
+  metaPath?: string;
   manifestBlobHash: string;
   manifestPath: string;
   chunks: Array<{ path: string; blobHash: string; bytes: number }>;
@@ -40,12 +49,14 @@ export interface SnapshotManifestV3 {
     chunks: number;
     assets: number;
     packs: number;
+    categories?: number;
   };
-  dbExport: {
+  dbExport?: {
     path: string;
     blobHash: string;
     bytes: number;
   };
+  categories?: SnapshotCategoryRef[];
   assetMeta?: {
     path: string;
     blobHash: string;
@@ -54,6 +65,47 @@ export interface SnapshotManifestV3 {
   entries: Record<string, SnapshotEntryRef>;
   assets: SnapshotAssetRef[];
   packs: string[]; // List of pack IDs referenced by this snapshot
+}
+
+export interface PackUploadDetail {
+  packId: string;
+  bytes: number;
+  durationMs: number;
+  mbPerSec: number;
+  httpRequests: number;
+}
+
+export interface BackupTimings {
+  remoteListingMs: number;
+  localScanAndHashMs: number;
+  packingMs: number;
+  packsUploadMs: number;
+  indexUploadMs: number;
+  snapshotUploadMs: number;
+  verificationMs: number;
+  totalDurationMs: number;
+  httpRequests: {
+    remoteListing: number;
+    packsUpload: number;
+    indexUpload: number;
+    snapshotUpload: number;
+    verification: number;
+    total: number;
+  };
+  packUploads: PackUploadDetail[];
+}
+
+export interface BackupJobSummary {
+  jobId: string;
+  status: 'completed' | 'unchanged' | 'failed';
+  snapshotId: string | null;
+  uploadedPacks: number;
+  newBlobsCount: number;
+  skippedBlobsCount: number;
+  totalFiles: number;
+  totalBytes: number;
+  timings?: BackupTimings;
+  error?: string | null;
 }
 
 export interface BackupStatus {
@@ -70,4 +122,6 @@ export interface BackupStatus {
   totalFiles?: number;
   processedCount?: number;
   remoteFileCount?: number;
+  timings?: BackupTimings;
+  lastJob?: BackupJobSummary;
 }
