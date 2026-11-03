@@ -448,3 +448,18 @@ kaaj/
 - Provide "Restore" buttons for individual entries to restore them immediately.
 - Provide a "Delete Permanently" button per item and an "Empty Trash" bulk action.
 - Show confirmation dialog before permanent deletion.
+
+## 22. Editor Blocks & Outline Navigation (LOCKED)
+
+### 22.1 Rich Editor Blocks
+- **Tables**: Support tabular data with `@tiptap/extension-table`, `TableRow`, `TableHeader`, and `TableCell`. Provide commands to insert table, add/remove rows and columns.
+- **Task Lists**: Support interactive checkable tasks with `@tiptap/extension-task-list` and `@tiptap/extension-task-item`. Persist checked state.
+- **Code Blocks**: Support multi-line formatted code blocks with monospace font styling.
+- **Callouts**: Provide custom callout block with custom border, background tint, and icon indicator for notes and warnings.
+- **Markdown Shortcuts**: Enable standard input rules for headings (`#`, `##`, `###`), lists (`-`, `1.`), task list (`[ ]`), blockquotes (`>`), bold (`**`), and code blocks (```).
+
+### 22.2 Document Outline Sidebar
+- Extract document outline from all active H1, H2, and H3 headings.
+- Display outline hierarchy in a floating or docked sidebar panel.
+- Allow users to click any outline item to scroll immediately to the corresponding section.
+- Provide toggle button in the editor toolbar to open and close the outline sidebar.

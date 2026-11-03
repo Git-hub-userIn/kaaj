@@ -278,6 +278,94 @@ export const EditorImageNodeSchema = z.object({
 
 export type EditorImageNode = z.infer<typeof EditorImageNodeSchema>;
 
+// Code Block node
+export const EditorCodeBlockNodeSchema = z.object({
+  type: z.literal('codeBlock'),
+  attrs: z.object({
+    id: z.string().nullable().optional(),
+    language: z.string().nullable().optional(),
+  }).passthrough().optional(),
+  content: z.array(EditorTextNodeSchema).optional(),
+});
+export type EditorCodeBlockNode = z.infer<typeof EditorCodeBlockNodeSchema>;
+
+// Task List and Task Item nodes
+export type EditorTaskItemNode = {
+  type: 'taskItem';
+  attrs?: {
+    id?: string | null;
+    checked?: boolean;
+    [key: string]: unknown;
+  };
+  content?: EditorParagraphNode[];
+};
+
+export type EditorTaskListNode = {
+  type: 'taskList';
+  attrs?: Record<string, unknown>;
+  content?: EditorTaskItemNode[];
+};
+
+export const EditorTaskItemNodeSchema: z.ZodType<EditorTaskItemNode> = z.lazy(() =>
+  z.object({
+    type: z.literal('taskItem'),
+    attrs: z.object({
+      id: z.string().nullable().optional(),
+      checked: z.boolean().default(false),
+    }).passthrough().optional(),
+    content: z.array(EditorParagraphNodeSchema).optional(),
+  })
+);
+
+export const EditorTaskListNodeSchema: z.ZodType<EditorTaskListNode> = z.lazy(() =>
+  z.object({
+    type: z.literal('taskList'),
+    attrs: z.object({
+      id: z.string().nullable().optional(),
+    }).passthrough().optional(),
+    content: z.array(EditorTaskItemNodeSchema).optional(),
+  })
+);
+
+// Table nodes
+export const EditorTableCellNodeSchema = z.object({
+  type: z.literal('tableCell'),
+  attrs: z.record(z.unknown()).optional(),
+  content: z.array(EditorParagraphNodeSchema).optional(),
+});
+
+export const EditorTableHeaderNodeSchema = z.object({
+  type: z.literal('tableHeader'),
+  attrs: z.record(z.unknown()).optional(),
+  content: z.array(EditorParagraphNodeSchema).optional(),
+});
+
+export const EditorTableRowNodeSchema = z.object({
+  type: z.literal('tableRow'),
+  attrs: z.record(z.unknown()).optional(),
+  content: z.array(z.union([EditorTableCellNodeSchema, EditorTableHeaderNodeSchema])).optional(),
+});
+
+export const EditorTableNodeSchema = z.object({
+  type: z.literal('table'),
+  attrs: z.object({
+    id: z.string().nullable().optional(),
+  }).passthrough().optional(),
+  content: z.array(EditorTableRowNodeSchema).optional(),
+});
+export type EditorTableNode = z.infer<typeof EditorTableNodeSchema>;
+
+// Callout node
+export const EditorCalloutNodeSchema = z.object({
+  type: z.literal('callout'),
+  attrs: z.object({
+    id: z.string().nullable().optional(),
+    variant: z.enum(['info', 'warning', 'success', 'note']).default('info'),
+  }).passthrough().optional(),
+  content: z.array(EditorParagraphNodeSchema).optional(),
+});
+export type EditorCalloutNode = z.infer<typeof EditorCalloutNodeSchema>;
+
 export const TopLevelBlockSchema = z.union([
   EditorParagraphNodeSchema,
   EditorHeadingNodeSchema,
@@ -286,6 +374,10 @@ export const TopLevelBlockSchema = z.union([
   EditorBlockquoteNodeSchema,
   EditorHorizontalRuleNodeSchema,
   EditorImageNodeSchema,
+  EditorCodeBlockNodeSchema,
+  EditorTaskListNodeSchema,
+  EditorTableNodeSchema,
+  EditorCalloutNodeSchema,
 ]);
 
 export const ProseMirrorDocSchema = z.object({

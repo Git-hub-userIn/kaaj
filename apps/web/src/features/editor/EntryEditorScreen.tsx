@@ -51,8 +51,16 @@ import {
 import { ensureFontLoaded } from './font-loader.js';
 import { GlobalBackupStatus } from '../backup/GlobalBackupStatus.js';
 import { API_BASE_URL, AUTH_TOKEN, getAuthToken, getUserId, getWsUrl } from '../../config/api.js';
-import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff, History } from 'lucide-react';
+import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff, History, ListTree } from 'lucide-react';
 import { RevisionHistoryDrawer } from './RevisionHistoryDrawer.js';
+import { OutlineSidebar } from './OutlineSidebar.js';
+import { CalloutExtension } from './extensions/callout.js';
+import { Table } from '@tiptap/extension-table';
+import { TableRow } from '@tiptap/extension-table-row';
+import { TableHeader } from '@tiptap/extension-table-header';
+import { TableCell } from '@tiptap/extension-table-cell';
+import { TaskList } from '@tiptap/extension-task-list';
+import { TaskItem } from '@tiptap/extension-task-item';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { IndexeddbPersistence } from 'y-indexeddb';
@@ -98,6 +106,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [contextMenuCoords, setContextMenuCoords] = useState<{ x: number; y: number } | null>(null);
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchCoordsRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -351,6 +360,13 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       FontSizeExtension,
       UniqueIdExtension,
       ImageBlockExtension,
+      Table.configure({ resizable: true }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      TaskList,
+      TaskItem.configure({ nested: true }),
+      CalloutExtension,
     ],
     editorProps: {
       attributes: {
@@ -804,37 +820,14 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         lastSavedHashRef.current = computeDocHash(loaded.title, loaded.doc);
 
         if (editor) {
-          const fragment = ydocRef.current?.getXmlFragment('default');
-          const hasContent = fragment && fragment.length > 0;
-          if (!hasContent) {
-            const p = providerRef.current;
-            if (!p || !p.synced) {
-              if (p && !p.wsconnected) {
-                editor.commands.setContent(loaded.doc.doc as any);
-              } else if (p) {
-                const onSynced = (isSynced: boolean) => {
-                  if (isSynced) {
-                    p.off('sync', onSynced);
-                    const frag = ydocRef.current?.getXmlFragment('default');
-                    if (!frag || frag.length === 0) {
-                      editor.commands.setContent(loaded.doc.doc as any);
-                    }
-                  }
-                };
-                p.on('sync', onSynced);
-                setTimeout(() => {
-                  p.off('sync', onSynced);
-                  const frag = ydocRef.current?.getXmlFragment('default');
-                  if (!frag || frag.length === 0) {
-                    editor.commands.setContent(loaded.doc.doc as any);
-                  }
-                }, 800);
-              } else {
-                editor.commands.setContent(loaded.doc.doc as any);
-              }
-            } else if (editor.isEmpty) {
-              editor.commands.setContent(loaded.doc.doc as any);
-            }
+          const isDocEmpty =
+            editor.isEmpty ||
+            (editor.state.doc.childCount === 1 &&
+              editor.state.doc.firstChild?.isTextblock &&
+              editor.state.doc.firstChild?.content.size === 0);
+
+          if (isDocEmpty && loaded.doc?.doc?.content?.length) {
+            editor.commands.setContent(loaded.doc.doc as any);
           }
         }
 
@@ -1136,6 +1129,85 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
           border-radius: 2px;
           padding: 1px 3px;
         }
+        /* Tables */
+        .kaaj-editor-content table {
+          border-collapse: collapse;
+          table-layout: fixed;
+          width: 100%;
+          margin: 1.5em 0;
+          overflow: hidden;
+          border-radius: 4px;
+        }
+        .kaaj-editor-content table td,
+        .kaaj-editor-content table th {
+          min-width: 1em;
+          border: 1px solid ${COLOR_TOKENS.border};
+          padding: 8px 12px;
+          vertical-align: top;
+          box-sizing: border-box;
+          position: relative;
+        }
+        .kaaj-editor-content table th {
+          font-weight: 600;
+          text-align: left;
+          background-color: ${COLOR_TOKENS.paperDark};
+        }
+        /* Task lists */
+        .kaaj-editor-content ul[data-type="taskList"] {
+          list-style: none;
+          padding: 0;
+          margin: 0.8em 0;
+        }
+        .kaaj-editor-content ul[data-type="taskList"] li {
+          display: flex;
+          align-items: flex-start;
+          margin-bottom: 0.4em;
+        }
+        .kaaj-editor-content ul[data-type="taskList"] li > label {
+          flex: 0 0 auto;
+          margin-right: 0.6rem;
+          user-select: none;
+          cursor: pointer;
+        }
+        .kaaj-editor-content ul[data-type="taskList"] li > div {
+          flex: 1 1 auto;
+        }
+        /* Code blocks */
+        .kaaj-editor-content pre {
+          background: #231e1a;
+          color: #f7f4ee;
+          font-family: ${TYPOGRAPHY_TOKENS.fontFamilyMono};
+          padding: 14px 18px;
+          border-radius: 6px;
+          overflow-x: auto;
+          margin: 1.2em 0;
+        }
+        .kaaj-editor-content pre code {
+          color: inherit;
+          padding: 0;
+          background: none;
+          font-size: 0.85em;
+        }
+        /* Callouts */
+        .kaaj-editor-content .kaaj-callout {
+          border-left: 4px solid ${COLOR_TOKENS.terracotta};
+          background-color: ${COLOR_TOKENS.paperDark};
+          padding: 12px 16px;
+          border-radius: 4px;
+          margin: 1.2em 0;
+        }
+        .kaaj-editor-content .kaaj-callout-warning {
+          border-left-color: #d97706;
+          background-color: #fefce8;
+        }
+        .kaaj-editor-content .kaaj-callout-success {
+          border-left-color: #16a34a;
+          background-color: #f0fdf4;
+        }
+        .kaaj-editor-content .kaaj-callout-note {
+          border-left-color: #2563eb;
+          background-color: #eff6ff;
+        }
       `}</style>
 
       {/* Main Single Reading Column (Centered, Max Width ~760px) */}
@@ -1212,6 +1284,31 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
             >
               <ImageIcon size={13} aria-hidden="true" />
               <span>Image</span>
+            </button>
+
+            {/* Outline Sidebar Button */}
+            <button
+              type="button"
+              data-testid="toolbar-outline-btn"
+              onClick={() => setOutlineOpen(!outlineOpen)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                backgroundColor: outlineOpen ? COLOR_TOKENS.paperDark : 'transparent',
+                border: `1px solid ${COLOR_TOKENS.paperDark}`,
+                borderRadius: RADIUS_TOKENS.sm,
+                cursor: 'pointer',
+                color: outlineOpen ? COLOR_TOKENS.ink : COLOR_TOKENS.inkMuted,
+                fontSize: '13px',
+                padding: '4px 8px',
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                transition: 'all 0.15s ease',
+              }}
+              title="Document Outline"
+            >
+              <ListTree size={13} aria-hidden="true" />
+              <span>Outline</span>
             </button>
 
             {/* Revision History Button */}
@@ -1570,6 +1667,12 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
           )}
         </main>
       </div>
+
+      <OutlineSidebar
+        editor={editor}
+        isOpen={outlineOpen}
+        onClose={() => setOutlineOpen(false)}
+      />
 
       <RevisionHistoryDrawer
         entryId={entryId}

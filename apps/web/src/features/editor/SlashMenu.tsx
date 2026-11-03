@@ -17,6 +17,10 @@ import {
   Quote,
   Minus,
   Image as ImageIcon,
+  Table as TableIcon,
+  CheckSquare,
+  Code,
+  Info,
 } from 'lucide-react';
 
 export interface SlashMenuProps {
@@ -103,6 +107,34 @@ export const SlashMenu: React.FC<SlashMenuProps> = ({
       description: 'Horizontal separator line',
       icon: <Minus size={16} aria-hidden="true" />,
       action: (ed) => ed.chain().focus().setHorizontalRule().run(),
+    },
+    {
+      id: 'table',
+      label: 'Table',
+      description: 'Grid table with rows and columns',
+      icon: <TableIcon size={16} aria-hidden="true" />,
+      action: (ed) => ed.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
+    },
+    {
+      id: 'task-list',
+      label: 'Task List',
+      description: 'Interactive checklist with checkboxes',
+      icon: <CheckSquare size={16} aria-hidden="true" />,
+      action: (ed) => ed.chain().focus().toggleTaskList().run(),
+    },
+    {
+      id: 'code-block',
+      label: 'Code Block',
+      description: 'Pre-formatted monospace code block',
+      icon: <Code size={16} aria-hidden="true" />,
+      action: (ed) => ed.chain().focus().toggleCodeBlock().run(),
+    },
+    {
+      id: 'callout',
+      label: 'Callout',
+      description: 'Highlighted callout note or warning',
+      icon: <Info size={16} aria-hidden="true" />,
+      action: (ed) => (ed.chain().focus() as any).setCallout({ variant: 'info' }).run(),
     },
     {
       id: 'image',
