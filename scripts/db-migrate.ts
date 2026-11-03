@@ -28,9 +28,10 @@ export async function runPrismaMigrate(targetDbUrl?: string): Promise<void> {
     ? [prismaBin, 'migrate', 'deploy']
     : [prismaBin, 'migrate', 'dev', '--name', 'init'];
 
+  const runner = process.versions.node && !('Bun' in globalThis) ? process.execPath : 'node';
   return new Promise((resolve, reject) => {
     const proc = spawn(
-      process.execPath, // node or bun
+      runner,
       commandArgs,
       {
         cwd: rootDir,

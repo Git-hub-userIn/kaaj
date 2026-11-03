@@ -275,13 +275,33 @@ kaaj/
 - **Markdown:** plain Markdown text, relative asset references, companion frontmatter.
 - **PDF:** rendered via headless Chromium through Playwright.
 
-## 11. Authentication (LOCKED)
+## 11. Authentication & User Isolation (LOCKED)
 
-- Single-user application.
-- Auth seam: single guard in `apps/api/src/auth/` validating request tokens.
-- Development uses `AUTH_TOKEN` from environment variables.
-- Production uses secure token or Cloudflare Access header validation.
-- Do not build multi-user tables or login credential systems.
+### 11.1 User Model & Multi-Tenant Isolation
+- The database contains a `User` model (`id`, `email`, `name`, `createdAt`, `updatedAt`).
+- All persistent resources require a `userId` foreign key with an index.
+- Resources with `userId`: Category, Entry, Chunk, EntryManifest, AssetMeta, MaintenanceState, JobLease.
+- Base data backfills to one initial seed user (`dev-owner-user`).
+
+### 11.2 Auth Guard Seam
+- The application uses a swappable authentication guard in `apps/api/src/auth/guard.ts`.
+- In development and test modes, the guard resolves the user from request tokens or defaults to `dev-owner-user`.
+- The guard attaches the authenticated `userId` to the Hono request context (`c.get('userId')`).
+- Production deployments can swap this seam with an external Identity Provider (IdP) or Cloudflare Access headers.
+
+### 11.3 Database Scoping via Prisma Client Extension
+- Database isolation uses Prisma Client Extensions via `forUser(userId)`.
+- Base `PrismaClient` remains private to the database module.
+- The extension automatically injects `userId` into query filters (`where`) and mutation payloads (`data`).
+- Queries use `findFirst` instead of `findUnique` for user-owned records.
+- Raw SQL queries (hot paths, atomic chunk saves, searches) accept explicit `userId` parameters and filter strictly.
+
+### 11.4 Storage, Google Drive & Asset Isolation
+- Vault assets store inside user-scoped paths: `data/vault/<userId>/...`.
+- Asset retrieval routes assert user ownership before returning files or WebP thumbnails.
+- Google Drive OAuth tokens store encrypted at rest per user (`data/users/<userId>/google-oauth.enc`).
+- Google Drive pack backups upload into dedicated per-user folders.
+- The API enforces per-user rate limiting and upload quotas (e.g. 500 MB total assets, 60 requests/minute).
 
 ## 12. Performance rules
 

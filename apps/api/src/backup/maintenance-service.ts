@@ -8,8 +8,7 @@ import { checkBackupRepository } from './backup-check.js';
 import { pruneBackups } from './backup-prune.js';
 import { createPack, extractBlobFromPack, readPackFooter, type PackBlobInput } from './pack-format.js';
 import type { IndexFile, SnapshotManifestV3 } from './repository-types.js';
-import { prisma as defaultPrisma } from '../db/client.js';
-import type { PrismaClient } from '../generated/client/index.js';
+import { forUser, type ScopedPrismaClient } from '../db/client.js';
 
 export const REMOTE_FILE_COUNT_THRESHOLD = 100;
 export const SMALL_PACK_THRESHOLD_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -51,20 +50,27 @@ export class MaintenanceService {
   private target: BackupTarget;
   private jobLock: JobLock;
   private stateFilePath: string;
-  private prisma: PrismaClient;
+  private prisma: ScopedPrismaClient;
+  private userId: string;
   private lastEditAt = 0;
 
-  constructor(baseDataDir: string, target: BackupTarget, prisma?: PrismaClient) {
+  constructor(baseDataDir: string, target: BackupTarget, prisma?: ScopedPrismaClient, userId: string = 'dev-owner-user') {
     this.baseDataDir = baseDataDir;
     this.target = target;
-    this.prisma = prisma || defaultPrisma;
-    this.jobLock = new JobLock(target, this.prisma);
+    this.userId = userId;
+    this.prisma = prisma || forUser(userId);
+    this.jobLock = new JobLock(target, this.prisma, userId);
     this.stateFilePath = path.join(baseDataDir, 'maintenance-state.json');
+  }
+
+  forUser(userId: string): MaintenanceService {
+    const scopedTarget = this.target.forUser ? this.target.forUser(userId) : this.target;
+    return new MaintenanceService(this.baseDataDir, scopedTarget, forUser(userId), userId);
   }
 
   setTarget(target: BackupTarget): void {
     this.target = target;
-    this.jobLock = new JobLock(target, this.prisma);
+    this.jobLock = new JobLock(target, this.prisma, this.userId);
   }
 
   recordEdit(nowMs = Date.now()): void {
@@ -77,7 +83,7 @@ export class MaintenanceService {
 
   async getState(): Promise<MaintenanceState> {
     try {
-      const dbState = await this.prisma.maintenanceState.findUnique({
+      const dbState = await this.prisma.maintenanceState.findFirst({
         where: { id: 'singleton' },
       });
       if (dbState) {
@@ -118,9 +124,10 @@ export class MaintenanceService {
     try {
       // 1. Persist to PostgreSQL
       await this.prisma.maintenanceState.upsert({
-        where: { id: 'singleton' },
+        where: { userId_id: { userId: this.userId, id: 'singleton' } },
         create: {
           id: 'singleton',
+          userId: this.userId,
           lastBackupAt: state.lastBackupAt ? new Date(state.lastBackupAt) : null,
           lastPruneAt: state.lastPruneAt ? new Date(state.lastPruneAt) : null,
           lastResult: state.lastResult ?? null,

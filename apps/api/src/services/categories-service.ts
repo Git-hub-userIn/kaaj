@@ -27,13 +27,12 @@ import {
   type TopLevelBlock,
 } from '@kaaj/doc-model';
 import type { LocalDiskAssetStore } from '../stores/asset-store.js';
-import { prisma as defaultPrisma } from '../db/client.js';
+import { forUser, type ScopedPrismaClient } from '../db/client.js';
 import {
   hotPathSaveChunkedEntry,
   hotPathVersionCheckedUpdateEntry,
   ConcurrencyConflictError,
 } from '../db/hot-paths.js';
-import type { PrismaClient } from '../generated/client/index.js';
 
 export interface EntryRecord {
   id: string;
@@ -57,19 +56,32 @@ export class CategoriesService {
   private baseDataDir: string;
   private assetStore: LocalDiskAssetStore;
   private seedCoversDir: string;
-  private prisma: PrismaClient;
+  private prisma: ScopedPrismaClient;
+  private userId: string;
   private initialized = false;
 
   constructor(
     baseDataDir: string,
     assetStore: LocalDiskAssetStore,
     seedCoversDir: string,
-    prisma?: PrismaClient
+    prisma?: ScopedPrismaClient,
+    userId: string = 'dev-owner-user'
   ) {
     this.baseDataDir = baseDataDir;
     this.assetStore = assetStore;
     this.seedCoversDir = seedCoversDir;
-    this.prisma = prisma || defaultPrisma;
+    this.userId = userId;
+    this.prisma = prisma || forUser(userId);
+  }
+
+  forUser(userId: string): CategoriesService {
+    return new CategoriesService(
+      this.baseDataDir,
+      this.assetStore,
+      this.seedCoversDir,
+      forUser(userId),
+      userId
+    );
   }
 
   async init(_subject?: string): Promise<void> {
@@ -362,7 +374,7 @@ export class CategoriesService {
 
   async getEntryManifest(id: string, _subject?: string): Promise<EntryManifest | null> {
     await this.init();
-    const manifest = await this.prisma.entryManifest.findUnique({
+    const manifest = await this.prisma.entryManifest.findFirst({
       where: { entryId: id },
     });
     if (!manifest) return null;
@@ -381,8 +393,8 @@ export class CategoriesService {
 
   async getEntryChunk(entryId: string, chunkId: string, _subject?: string): Promise<ChunkPayload | null> {
     await this.init();
-    const chunk = await this.prisma.chunk.findUnique({
-      where: { entryId_id: { entryId, id: chunkId } },
+    const chunk = await this.prisma.chunk.findFirst({
+      where: { entryId, id: chunkId },
     });
     if (!chunk) return null;
 
@@ -411,7 +423,7 @@ export class CategoriesService {
       }
   > {
     await this.init();
-    const entry = await this.prisma.entry.findUnique({
+    const entry = await this.prisma.entry.findFirst({
       where: { id: entryId },
     });
     if (!entry || entry.deletedAt) {
@@ -462,6 +474,7 @@ export class CategoriesService {
 
     try {
       const { nextVersion } = await hotPathSaveChunkedEntry(this.prisma, {
+        userId: this.userId,
         entryId,
         expectedVersion,
         manifest,
@@ -480,7 +493,7 @@ export class CategoriesService {
       };
     } catch (err: any) {
       if (err instanceof ConcurrencyConflictError || err.statusCode === 409) {
-        const fresh = await this.prisma.entry.findUnique({ where: { id: entryId } });
+        const fresh = await this.prisma.entry.findFirst({ where: { id: entryId } });
         return { conflict: true, currentVersion: fresh?.version ?? entry.version };
       }
       throw err;
@@ -575,6 +588,7 @@ export class CategoriesService {
     });
 
     await hotPathSaveChunkedEntry(this.prisma, {
+      userId: this.userId,
       entryId,
       expectedVersion: 1,
       manifest,
@@ -617,8 +631,14 @@ export class CategoriesService {
   ): Promise<EntryRecord | null> {
     await this.init();
 
+    const existing = await this.prisma.entry.findFirst({ where: { id } });
+    if (!existing || existing.deletedAt) {
+      return null;
+    }
+
     if (expectedVersion !== undefined) {
       await hotPathVersionCheckedUpdateEntry(this.prisma, {
+        userId: this.userId,
         id,
         version: expectedVersion,
         ...updates,
@@ -649,7 +669,7 @@ export class CategoriesService {
     _subject?: string
   ): Promise<{ conflict: true; currentVersion: number } | { entry: EntryRecord; saved: boolean }> {
     await this.init();
-    const entry = await this.prisma.entry.findUnique({ where: { id } });
+    const entry = await this.prisma.entry.findFirst({ where: { id } });
     if (!entry || entry.deletedAt) {
       throw new Error('Entry not found');
     }
@@ -672,6 +692,7 @@ export class CategoriesService {
 
     try {
       await hotPathSaveChunkedEntry(this.prisma, {
+        userId: this.userId,
         entryId: id,
         expectedVersion,
         manifest,
@@ -691,7 +712,7 @@ export class CategoriesService {
       return { entry: freshEntry!, saved: true };
     } catch (err: any) {
       if (err instanceof ConcurrencyConflictError || err.statusCode === 409) {
-        const fresh = await this.prisma.entry.findUnique({ where: { id } });
+        const fresh = await this.prisma.entry.findFirst({ where: { id } });
         return { conflict: true, currentVersion: fresh?.version ?? entry.version };
       }
       throw err;

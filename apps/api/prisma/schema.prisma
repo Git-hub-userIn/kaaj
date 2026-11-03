@@ -7,8 +7,25 @@ datasource db {
   provider = "postgresql"
 }
 
+model User {
+  id               String             @id @default(uuid())
+  email            String             @unique
+  name             String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  categories       Category[]
+  entries          Entry[]
+  manifests        EntryManifest[]
+  chunks           Chunk[]
+  assets           AssetMeta[]
+  maintenanceState MaintenanceState[]
+  leases           JobLease[]
+}
+
 model Category {
   id           String    @id @default(uuid())
+  userId       String    @default("dev-owner-user")
   title        String
   description  String?
   coverAssetId String?
@@ -20,14 +37,17 @@ model Category {
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
 
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   entries      Entry[]
 
+  @@index([userId])
   @@index([deletedAt])
   @@index([sortOrder])
 }
 
 model Entry {
   id            String         @id @default(uuid())
+  userId        String         @default("dev-owner-user")
   categoryId    String
   title         String
   color         String?
@@ -43,10 +63,12 @@ model Entry {
   updatedAt     DateTime       @updatedAt
   deletedAt     DateTime?
 
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   category      Category       @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   manifest      EntryManifest?
   chunks        Chunk[]
 
+  @@index([userId])
   @@index([categoryId])
   @@index([deletedAt])
   @@index([sortOrder])
@@ -54,6 +76,7 @@ model Entry {
 
 model EntryManifest {
   id            String   @id @default(uuid())
+  userId        String   @default("dev-owner-user")
   entryId       String   @unique
   schemaVersion Int      @default(2)
   version       Int
@@ -64,12 +87,16 @@ model EntryManifest {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   entry         Entry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Chunk {
   id         String
   entryId    String
+  userId     String   @default("dev-owner-user")
   order      Int      @default(0)
   version    Int      @default(1)
   checksum   String
@@ -79,14 +106,17 @@ model Chunk {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   entry      Entry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
 
   @@id([entryId, id])
+  @@index([userId])
   @@index([entryId])
 }
 
 model AssetMeta {
   id           String   @id
+  userId       String   @default("dev-owner-user")
   storageKey   String   @unique
   mime         String
   bytes        Int
@@ -95,23 +125,39 @@ model AssetMeta {
   originalName String?
   checksum     String
   createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model MaintenanceState {
-  id              String    @id @default("singleton")
+  id              String    @default("singleton")
+  userId          String    @default("dev-owner-user")
   lastBackupAt    DateTime?
   lastPruneAt     DateTime?
   lastResult      String?
   lastError       String?
   remoteFileCount Int?
   updatedAt       DateTime  @updatedAt
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, id])
+  @@index([userId])
 }
 
 model JobLease {
-  name       String   @id
+  name       String
+  userId     String   @default("dev-owner-user")
   holder     String
   token      BigInt   @default(0)
   acquiredAt DateTime
   expiresAt  DateTime
   updatedAt  DateTime @updatedAt
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, name])
+  @@index([userId])
 }

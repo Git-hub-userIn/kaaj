@@ -91,6 +91,11 @@ backupService.startPeriodicTimer();
 const maintenanceScheduler = new MaintenanceScheduler(maintenanceService);
 maintenanceScheduler.start();
 
+// Helper to extract authenticated userId from request context
+function getUserId(c: any): string {
+  return (c.get('userId') as string) || 'dev-owner-user';
+}
+
 app.get('/health', (c) => {
   const bunGlobal = (globalThis as unknown as { Bun?: { version: string } }).Bun;
   return c.json({
@@ -106,13 +111,13 @@ app.get('/health', (c) => {
 
 // Category Endpoints
 app.get('/categories', async (c) => {
-  const categories = await categoriesService.listCategories();
+  const categories = await categoriesService.forUser(getUserId(c)).listCategories();
   return c.json(categories);
 });
 
 app.get('/categories/:id', async (c) => {
   const id = c.req.param('id');
-  const cat = await categoriesService.getCategory(id);
+  const cat = await categoriesService.forUser(getUserId(c)).getCategory(id);
   if (!cat) {
     return c.json({ error: 'Category not found' }, 404);
   }
@@ -122,7 +127,7 @@ app.get('/categories/:id', async (c) => {
 
 app.get('/categories/:id/stats', async (c) => {
   const id = c.req.param('id');
-  const stats = await categoriesService.getCategoryStats(id);
+  const stats = await categoriesService.forUser(getUserId(c)).getCategoryStats(id);
   if (!stats) {
     return c.json({ error: 'Category not found' }, 404);
   }
@@ -131,11 +136,12 @@ app.get('/categories/:id/stats', async (c) => {
 
 app.get('/categories/:id/entries', async (c) => {
   const id = c.req.param('id');
-  const cat = await categoriesService.getCategory(id);
+  const catSvc = categoriesService.forUser(getUserId(c));
+  const cat = await catSvc.getCategory(id);
   if (!cat) {
     return c.json({ error: 'Category not found' }, 404);
   }
-  const entries = await categoriesService.listEntriesForCategory(id);
+  const entries = await catSvc.listEntriesForCategory(id);
   return c.json(entries);
 });
 
@@ -145,7 +151,7 @@ app.post('/categories', async (c) => {
     if (!body.title || typeof body.title !== 'string' || !body.title.trim()) {
       return c.json({ error: 'Title is required' }, 400);
     }
-    const category = await categoriesService.createCategory(body.title, body.coverAssetId, body.color);
+    const category = await categoriesService.forUser(getUserId(c)).createCategory(body.title, body.coverAssetId, body.color);
     return c.json(category, 201);
   } catch (err: any) {
     return c.json({ error: err.message || 'Failed to create category' }, 422);
@@ -164,7 +170,7 @@ app.patch('/categories/:id', async (c) => {
       }
     }
     const body = await c.req.json();
-    const result = await categoriesService.updateCategory(id, body, expectedVersion);
+    const result = await categoriesService.forUser(getUserId(c)).updateCategory(id, body, expectedVersion);
     if (!result) {
       return c.json({ error: 'Category not found' }, 404);
     }
@@ -180,7 +186,7 @@ app.patch('/categories/:id', async (c) => {
 
 app.delete('/categories/:id', async (c) => {
   const id = c.req.param('id');
-  const deleted = await categoriesService.deleteCategory(id);
+  const deleted = await categoriesService.forUser(getUserId(c)).deleteCategory(id);
   if (!deleted) {
     return c.json({ error: 'Category not found' }, 404);
   }
@@ -189,7 +195,7 @@ app.delete('/categories/:id', async (c) => {
 
 app.post('/categories/:id/restore', async (c) => {
   const id = c.req.param('id');
-  const restored = await categoriesService.restoreCategory(id);
+  const restored = await categoriesService.forUser(getUserId(c)).restoreCategory(id);
   if (!restored) {
     return c.json({ error: 'Category not found or not deleted' }, 404);
   }
@@ -199,7 +205,7 @@ app.post('/categories/:id/restore', async (c) => {
 // Entry Endpoints (per spec 8.1 & Category Stack screen)
 app.get('/entries/:id', async (c) => {
   const id = c.req.param('id');
-  const entry = await categoriesService.getEntry(id);
+  const entry = await categoriesService.forUser(getUserId(c)).getEntry(id);
 
   if (!entry) {
     return c.json({ error: 'Entry not found' }, 404);
@@ -217,13 +223,14 @@ app.post('/entries', async (c) => {
     }
 
     const { categoryId, title, color, pinned, spine } = parseResult.data;
-    const cat = await categoriesService.getCategory(categoryId);
+    const catSvc = categoriesService.forUser(getUserId(c));
+    const cat = await catSvc.getCategory(categoryId);
     if (!cat) {
       return c.json({ error: 'Category not found' }, 404);
     }
 
-    const entry = await categoriesService.createEntry(categoryId, title, color, pinned, spine, parseResult.data.doc);
-    maintenanceService.recordEdit();
+    const entry = await catSvc.createEntry(categoryId, title, color, pinned, spine, parseResult.data.doc);
+    maintenanceService.forUser(getUserId(c)).recordEdit();
     return c.json(entry, 201);
   } catch (err: any) {
     return c.json({ error: err.message || 'Failed to create entry' }, 422);
@@ -239,11 +246,11 @@ app.patch('/entries/:id', async (c) => {
       return c.json({ error: 'Validation failed', details: parseResult.error.format() }, 422);
     }
 
-    const updated = await categoriesService.updateEntry(id, parseResult.data);
+    const updated = await categoriesService.forUser(getUserId(c)).updateEntry(id, parseResult.data);
     if (!updated) {
       return c.json({ error: 'Entry not found' }, 404);
     }
-    maintenanceService.recordEdit();
+    maintenanceService.forUser(getUserId(c)).recordEdit();
     return c.json(updated);
   } catch (err: any) {
     return c.json({ error: err.message || 'Failed to update entry' }, 422);
@@ -252,17 +259,17 @@ app.patch('/entries/:id', async (c) => {
 
 app.delete('/entries/:id', async (c) => {
   const id = c.req.param('id');
-  const deleted = await categoriesService.deleteEntry(id);
+  const deleted = await categoriesService.forUser(getUserId(c)).deleteEntry(id);
   if (!deleted) {
     return c.json({ error: 'Entry not found' }, 404);
   }
-  maintenanceService.recordEdit();
+  maintenanceService.forUser(getUserId(c)).recordEdit();
   return c.json({ success: true, id });
 });
 
 app.post('/entries/:id/restore', async (c) => {
   const id = c.req.param('id');
-  const restored = await categoriesService.restoreEntry(id);
+  const restored = await categoriesService.forUser(getUserId(c)).restoreEntry(id);
   if (!restored) {
     return c.json({ error: 'Entry not found or not deleted' }, 404);
   }
@@ -312,7 +319,8 @@ app.put('/entries/:id', async (c) => {
   const title = typeof body.title === 'string' ? body.title : undefined;
 
   try {
-    const existing = await categoriesService.getEntry(id);
+    const catSvc = categoriesService.forUser(getUserId(c));
+    const existing = await catSvc.getEntry(id);
     if (!existing) {
       return c.json({ error: 'Entry not found' }, 404);
     }
@@ -320,11 +328,11 @@ app.put('/entries/:id', async (c) => {
     if (expectedVersion !== undefined && existing.version !== expectedVersion) {
       return c.json({ error: 'Version conflict', currentVersion: existing.version }, 409);
     }
-    const result = await categoriesService.saveEntryDoc(id, docToSave, expectedVersion, title);
+    const result = await catSvc.saveEntryDoc(id, docToSave, expectedVersion, title);
     if ('conflict' in result) {
       return c.json({ error: 'Version conflict', currentVersion: result.currentVersion }, 409);
     }
-    maintenanceService.recordEdit();
+    maintenanceService.forUser(getUserId(c)).recordEdit();
     c.header('ETag', `"${result.entry.version}"`);
     return c.json({
       id: result.entry.id,
@@ -343,7 +351,7 @@ app.put('/entries/:id', async (c) => {
 // Chunked Storage Endpoints (per spec v0.2 Step 3)
 app.get('/entries/:id/manifest', async (c) => {
   const id = c.req.param('id');
-  const manifest = await categoriesService.getEntryManifest(id);
+  const manifest = await categoriesService.forUser(getUserId(c)).getEntryManifest(id);
   if (!manifest) {
     return c.json({ error: 'Entry or manifest not found' }, 404);
   }
@@ -354,7 +362,7 @@ app.get('/entries/:id/manifest', async (c) => {
 app.get('/entries/:id/chunks/:chunkId', async (c) => {
   const id = c.req.param('id');
   const chunkId = c.req.param('chunkId');
-  const chunk = await categoriesService.getEntryChunk(id, chunkId);
+  const chunk = await categoriesService.forUser(getUserId(c)).getEntryChunk(id, chunkId);
   if (!chunk) {
     return c.json({ error: 'Chunk not found' }, 404);
   }
@@ -387,12 +395,18 @@ app.put('/entries/:id/chunks/:chunkId', async (c) => {
   }
 
   try {
-    const result = await categoriesService.saveEntryChunk(id, chunkId, blocks, expectedVersion);
+    const catSvc = categoriesService.forUser(getUserId(c));
+    const entry = await catSvc.getEntry(id);
+    if (!entry) {
+      return c.json({ error: 'Entry not found' }, 404);
+    }
+
+    const result = await catSvc.saveEntryChunk(id, chunkId, blocks, expectedVersion);
     if ('conflict' in result) {
       return c.json({ error: 'Version conflict', currentVersion: result.currentVersion }, 409);
     }
 
-    maintenanceService.recordEdit();
+    maintenanceService.forUser(getUserId(c)).recordEdit();
     c.header('ETag', `"${result.version}"`);
     return c.json(result);
   } catch (err: any) {
@@ -402,7 +416,7 @@ app.put('/entries/:id/chunks/:chunkId', async (c) => {
 
 app.post('/migrate', async (c) => {
   try {
-    const res = await categoriesService.runMigration();
+    const res = await categoriesService.forUser(getUserId(c)).runMigration();
     return c.json({ success: true, ...res });
   } catch (err: any) {
     return c.json({ error: err.message || 'Migration failed' }, 500);
@@ -412,6 +426,7 @@ app.post('/migrate', async (c) => {
 // Asset Endpoints
 app.post('/assets', async (c) => {
   try {
+    const userId = getUserId(c);
     const formData = await c.req.formData();
     const file = formData.get('file');
 
@@ -427,13 +442,17 @@ app.post('/assets', async (c) => {
     const buffer = Buffer.from(arrayBuffer);
 
     const fileName = file instanceof File ? file.name : 'upload.png';
-    const { asset } = await assetStore.put(buffer, file.type, fileName);
+    const userStore = assetStore.forUser(userId);
+    const { asset } = await userStore.put(buffer, file.type, fileName);
 
     return c.json({
       success: true,
       asset,
     }, 201);
   } catch (err: any) {
+    if (err.statusCode === 413 || err.message?.includes('Upload quota')) {
+      return c.json({ error: err.message || 'Upload quota exceeded' }, 413);
+    }
     console.error('Asset upload exception:', err);
     return c.json({ error: err.message || 'Asset upload failed' }, 422);
   }
@@ -441,12 +460,14 @@ app.post('/assets', async (c) => {
 
 app.get('/assets/:id', async (c) => {
   const id = c.req.param('id');
-  const record = await assetStore.getRecord(id);
+  const userId = getUserId(c);
+  const userStore = assetStore.forUser(userId);
+  const record = await userStore.getRecord(id);
   if (!record) {
     return c.text('Asset not found', 404);
   }
 
-  const data = await assetStore.get(record.storageKey);
+  const data = await userStore.get(record.storageKey);
   if (!data) {
     return c.text('Asset data not found', 404);
   }
@@ -458,9 +479,11 @@ app.get('/assets/:id', async (c) => {
 
 app.get('/assets/:id/thumb', async (c) => {
   const id = c.req.param('id');
+  const userId = getUserId(c);
+  const userStore = assetStore.forUser(userId);
   const sizeParam = c.req.query('size') === '960' ? '960' : '320';
 
-  const data = await assetStore.getThumb(id, sizeParam);
+  const data = await userStore.getThumb(id, sizeParam);
   if (!data) {
     return c.text('Thumbnail not found', 404);
   }
@@ -480,6 +503,18 @@ app.post('/export/pdf', async (c) => {
       return c.text('Missing htmlContent', 400);
     }
 
+    // Verify any referenced assets belong to caller's userId
+    const userId = getUserId(c);
+    const assetMatches = Array.from((htmlContent as string).matchAll(/\/assets\/([^"'\s]+)/g));
+    const userStore = assetStore.forUser(userId);
+    for (const match of assetMatches) {
+      const assetId = match[1].replace(/\/thumb.*/, '');
+      const record = await userStore.getRecord(assetId);
+      if (!record) {
+        return c.json({ error: `Unauthorized asset access in export: ${assetId}` }, 403);
+      }
+    }
+
     const pdfBuffer = await renderDocumentToPdf({ htmlContent });
     return new Response(new Uint8Array(pdfBuffer), {
       headers: {
@@ -492,23 +527,29 @@ app.post('/export/pdf', async (c) => {
   }
 });
 
-// Backup & Cloud Sync Endpoints
+// Backup & Cloud Sync Endpoints (User-Scoped)
 app.get('/backup/status', async (c) => {
-  const status = backupService.getStatus();
-  const mState = await maintenanceService.getState();
+  const userId = getUserId(c);
+  const userBackup = backupService.forUser(userId);
+  const userMaint = maintenanceService.forUser(userId);
+
+  const status = userBackup.getStatus();
+  const mState = await userMaint.getState();
   return c.json({
     ...status,
     lastCleanupTime: mState.lastPruneAt,
     lastPruneResult: mState.lastResult,
     remoteFileCount: status.remoteFileCount ?? mState.remoteFileCount ?? 0,
-    target: backupService.getTarget().name,
+    target: userBackup.getTarget().name,
   });
 });
 
 app.get('/backup/maintenance', async (c) => {
   try {
-    const state = await maintenanceService.getState();
-    const evaluation = await maintenanceService.isPruneDueAndIdle();
+    const userId = getUserId(c);
+    const userMaint = maintenanceService.forUser(userId);
+    const state = await userMaint.getState();
+    const evaluation = await userMaint.isPruneDueAndIdle();
     return c.json({ state, evaluation });
   } catch (err: any) {
     return c.json({ error: err.message || 'Failed to inspect maintenance' }, 500);
@@ -516,15 +557,17 @@ app.get('/backup/maintenance', async (c) => {
 });
 
 app.post('/backup/trigger', async (c) => {
+  const userId = getUserId(c);
+  const userBackup = backupService.forUser(userId);
   const wait = c.req.query('wait') === 'true';
+
   if (!wait) {
-    const triggerRes = backupService.triggerAsyncBackup();
+    const triggerRes = userBackup.triggerAsyncBackup();
     return c.json(triggerRes, 202);
   }
 
-  // When wait=true is requested, await completion and return only the summary (never full manifest)
   try {
-    const job = await backupService.createSnapshot();
+    const job = await userBackup.createSnapshot();
     return c.json({
       success: true,
       snapshotId: job.snapshotId,
@@ -543,10 +586,12 @@ app.post('/backup/trigger', async (c) => {
 
 app.post('/backup/prune', async (c) => {
   try {
+    const userId = getUserId(c);
+    const userMaint = maintenanceService.forUser(userId);
     const force = c.req.query('force') === 'true';
-    const result = await maintenanceService.runMaintenance({
+    const result = await userMaint.runMaintenance({
       force,
-      skipIdleCheck: true, // Manual user invocation bypasses idle edit check
+      skipIdleCheck: true,
     });
     return c.json(result);
   } catch (err: any) {
@@ -556,8 +601,10 @@ app.post('/backup/prune', async (c) => {
 
 app.get('/backup/check', async (c) => {
   try {
+    const userId = getUserId(c);
+    const userBackup = backupService.forUser(userId);
     const sampleRate = Number(c.req.query('sample')) || 1.0;
-    const result = await checkBackupRepository(backupService.getTarget(), { sampleRate });
+    const result = await checkBackupRepository(userBackup.getTarget(), { sampleRate });
     return c.json(result);
   } catch (err: any) {
     return c.json({ error: err.message || 'Check failed' }, 500);

@@ -3,8 +3,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { BackupTarget } from './backup-target.js';
-import { prisma as defaultPrisma } from '../db/client.js';
-import type { PrismaClient } from '../generated/client/index.js';
+import { forUser, type ScopedPrismaClient } from '../db/client.js';
 import {
   type BlobType,
   type PackBlobInput,
@@ -99,6 +98,7 @@ export class BackupService {
   private maintenanceService?: {
     saveState: (state: any) => Promise<void>;
     getState: () => Promise<any>;
+    forUser?: (userId: string) => any;
   };
 
   private currentJob: {
@@ -106,12 +106,23 @@ export class BackupService {
     startedAt: string;
     promise?: Promise<any>;
   } | null = null;
-  private prisma: PrismaClient;
+  private prisma: ScopedPrismaClient;
+  private userId: string;
 
-  constructor(baseDataDir: string, target: BackupTarget, prisma?: PrismaClient) {
+  constructor(baseDataDir: string, target: BackupTarget, prisma?: ScopedPrismaClient, userId: string = 'dev-owner-user') {
     this.baseDataDir = baseDataDir;
     this.target = target;
-    this.prisma = prisma || defaultPrisma;
+    this.userId = userId;
+    this.prisma = prisma || forUser(userId);
+  }
+
+  forUser(userId: string): BackupService {
+    const scopedTarget = this.target.forUser ? this.target.forUser(userId) : this.target;
+    const svc = new BackupService(this.baseDataDir, scopedTarget, forUser(userId), userId);
+    if (this.maintenanceService?.forUser) {
+      svc.setMaintenanceService(this.maintenanceService.forUser(userId));
+    }
+    return svc;
   }
 
   setMaintenanceService(service: any): void {

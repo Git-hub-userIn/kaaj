@@ -6,8 +6,6 @@ import pg from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/client/index.js';
 
-export { PrismaClient };
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -27,8 +25,21 @@ if (!process.env.DATABASE_URL) {
   }
 }
 
+// Base private client instances
 let prismaInstance: PrismaClient | null = null;
 let poolInstance: pg.Pool | null = null;
+let currentPrismaUrl: string | null = null;
+let currentPoolUrl: string | null = null;
+
+const USER_OWNED_MODELS = new Set([
+  'Category',
+  'Entry',
+  'EntryManifest',
+  'Chunk',
+  'AssetMeta',
+  'MaintenanceState',
+  'JobLease',
+]);
 
 export function resolveDatabaseUrl(overrideUrl?: string): string {
   if (overrideUrl) return overrideUrl;
@@ -63,7 +74,6 @@ export function resolveDatabaseUrl(overrideUrl?: string): string {
   return url.toString();
 }
 
-let currentPoolUrl: string | null = null;
 export function getDbPool(connectionString?: string): pg.Pool {
   const connStr = connectionString || resolveDatabaseUrl();
   if (poolInstance && currentPoolUrl === connStr && !connectionString) {
@@ -87,8 +97,8 @@ export function getDbPool(connectionString?: string): pg.Pool {
   return pool;
 }
 
-let currentPrismaUrl: string | null = null;
-export function getPrismaClient(connectionString?: string): PrismaClient {
+// Base PrismaClient stays private to this db module
+function getBasePrismaClient(connectionString?: string): PrismaClient {
   const connStr = connectionString || resolveDatabaseUrl();
   if (prismaInstance && currentPrismaUrl === connStr && !connectionString) {
     return prismaInstance;
@@ -111,23 +121,98 @@ export function getPrismaClient(connectionString?: string): PrismaClient {
   return client;
 }
 
-export const prisma = new Proxy({} as PrismaClient, {
-  get(_target, prop) {
-    const instance = getPrismaClient();
-    const value = (instance as any)[prop];
-    if (typeof value === 'function') {
-      return value.bind(instance);
-    }
-    return value;
-  },
-});
+function createScopedPrismaClient(userId: string, connectionString?: string) {
+  const baseClient = getBasePrismaClient(connectionString);
+
+  return baseClient.$extends({
+    name: `scoped-user-${userId}`,
+    query: {
+      $allModels: {
+        async $allOperations({ model, operation, args, query }) {
+          if (!model || !USER_OWNED_MODELS.has(model)) {
+            return query(args);
+          }
+
+          const mutableArgs = (args || {}) as any;
+
+          if (
+            operation === 'findFirst' ||
+            operation === 'findFirstOrThrow' ||
+            operation === 'findMany' ||
+            operation === 'count' ||
+            operation === 'aggregate' ||
+            operation === 'groupBy' ||
+            operation === 'findUnique' ||
+            operation === 'findUniqueOrThrow'
+          ) {
+            mutableArgs.where = { ...(mutableArgs.where || {}), userId };
+          } else if (operation === 'create') {
+            mutableArgs.data = { ...(mutableArgs.data || {}), userId };
+          } else if (operation === 'createMany' || operation === 'createManyAndReturn') {
+            if (Array.isArray(mutableArgs.data)) {
+              mutableArgs.data = mutableArgs.data.map((item: any) => ({ ...item, userId }));
+            } else if (mutableArgs.data) {
+              mutableArgs.data = { ...mutableArgs.data, userId };
+            }
+          } else if (
+            operation === 'update' ||
+            operation === 'updateMany' ||
+            operation === 'delete' ||
+            operation === 'deleteMany'
+          ) {
+            mutableArgs.where = { ...(mutableArgs.where || {}), userId };
+          } else if (operation === 'upsert') {
+            mutableArgs.where = { ...(mutableArgs.where || {}), userId };
+            mutableArgs.create = { ...(mutableArgs.create || {}), userId };
+          }
+
+          return query(mutableArgs);
+        },
+      },
+    },
+  });
+}
+
+export type ScopedPrismaClient = ReturnType<typeof createScopedPrismaClient>;
+
+const scopedClientCache = new Map<string, ScopedPrismaClient>();
+const knownUsers = new Set<string>();
+
+export async function ensureUser(userId: string, connectionString?: string): Promise<void> {
+  const cacheKey = `${connectionString || 'default'}:${userId}`;
+  if (knownUsers.has(cacheKey)) return;
+  const baseClient = getBasePrismaClient(connectionString);
+  await baseClient.user.upsert({
+    where: { id: userId },
+    update: {},
+    create: {
+      id: userId,
+      email: `${userId}@kaaj.local`,
+      name: userId,
+    },
+  });
+  knownUsers.add(cacheKey);
+}
+
+/**
+ * Returns a tenant-isolated Prisma client scoped to the specified userId.
+ * Base PrismaClient remains private; all queries transparently enforce userId.
+ */
+export function forUser(userId: string, connectionString?: string): ScopedPrismaClient {
+  const cacheKey = `${userId}::${connectionString || ''}`;
+  let client = scopedClientCache.get(cacheKey);
+  if (!client) {
+    client = createScopedPrismaClient(userId, connectionString);
+    scopedClientCache.set(cacheKey, client);
+  }
+  return client;
+}
 
 /**
  * Checks if PostgreSQL is reachable at application startup.
- * On failure, prints clear diagnostics and troubleshooting instructions.
  */
-export async function checkPostgresReachable(targetPrisma?: PrismaClient): Promise<void> {
-  const p = targetPrisma || prisma;
+export async function checkPostgresReachable(targetPrisma?: ScopedPrismaClient | PrismaClient): Promise<void> {
+  const p = targetPrisma || getBasePrismaClient();
   try {
     await p.$queryRaw`SELECT 1 as reachable`;
   } catch (error: any) {
@@ -135,11 +220,6 @@ export async function checkPostgresReachable(targetPrisma?: PrismaClient): Promi
     console.error('================================================================================');
     console.error('CRITICAL: Unable to connect to PostgreSQL database.');
     console.error(`Error details: ${message}`);
-    console.error('Likely fixes:');
-    console.error('  1. Verify the PostgreSQL Windows service is running (e.g. net start postgresql-x64-17).');
-    console.error('  2. Verify that localhost:5432 is accessible.');
-    console.error('  3. Check credentials in your .env file (DATABASE_URL).');
-    console.error('  4. Ensure target database exists (run: bun run db:create).');
     console.error('================================================================================');
     throw new Error(`PostgreSQL connectivity check failed: ${message}`);
   }
@@ -149,6 +229,7 @@ export async function checkPostgresReachable(targetPrisma?: PrismaClient): Promi
  * Graceful shutdown closing Prisma client and pool connections.
  */
 export async function closeDb(): Promise<void> {
+  scopedClientCache.clear();
   if (prismaInstance) {
     await prismaInstance.$disconnect();
     prismaInstance = null;

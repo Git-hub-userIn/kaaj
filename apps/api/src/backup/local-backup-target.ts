@@ -12,6 +12,10 @@ export class LocalFolderBackupTarget implements BackupTarget {
     this.rootDir = rootDir;
   }
 
+  forUser(userId: string): LocalFolderBackupTarget {
+    return new LocalFolderBackupTarget(path.join(this.rootDir, 'users', userId));
+  }
+
   async init(): Promise<void> {
     await fs.mkdir(this.rootDir, { recursive: true });
   }

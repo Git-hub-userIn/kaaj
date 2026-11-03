@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { BackupTarget, BackupFileRecord } from './backup-target.js';
 import { fetchWithRetry } from './drive-retry.js';
+import { encryptTokenData, decryptTokenData } from './token-crypto.js';
 
 export interface GoogleDriveConfig {
   clientId?: string;
@@ -150,11 +151,32 @@ export class GoogleDriveBackupTarget implements BackupTarget {
     } catch {}
   }
 
+  forUser(userId: string): GoogleDriveBackupTarget {
+    const userTokenPath = path.resolve(
+      path.dirname(this.config.tokenFilePath),
+      'users',
+      userId,
+      'google-oauth.enc'
+    );
+    const userCachePath = path.resolve(
+      path.dirname(this.cacheFilePath),
+      'users',
+      userId,
+      'drive-cache.json'
+    );
+    return new GoogleDriveBackupTarget({
+      ...this.config,
+      folderName: `${this.config.folderName || 'Kaaj'}/users/${userId}`,
+      tokenFilePath: fsSync.existsSync(userTokenPath) ? userTokenPath : this.config.tokenFilePath,
+      cacheFilePath: userCachePath,
+    });
+  }
+
   hasValidAuth(): boolean {
     try {
       if (!fsSync.existsSync(this.config.tokenFilePath)) return false;
       const raw = fsSync.readFileSync(this.config.tokenFilePath, 'utf8');
-      const parsed = JSON.parse(raw);
+      const parsed = decryptTokenData<StoredTokens>(raw);
       return Boolean(parsed && parsed.refreshToken);
     } catch {
       return false;
@@ -162,25 +184,26 @@ export class GoogleDriveBackupTarget implements BackupTarget {
   }
 
   /**
-   * Reads stored OAuth tokens from disk.
+   * Reads stored OAuth tokens from disk, decrypting if encrypted.
    */
   private async loadTokens(): Promise<StoredTokens | null> {
     try {
       if (!fsSync.existsSync(this.config.tokenFilePath)) return null;
       const raw = await fs.readFile(this.config.tokenFilePath, 'utf8');
-      return JSON.parse(raw);
+      return decryptTokenData<StoredTokens>(raw);
     } catch {
       return null;
     }
   }
 
   /**
-   * Saves updated tokens to disk atomically. Never logs token contents.
+   * Saves updated tokens to disk encrypted at rest. Never logs token contents.
    */
   async saveTokens(tokens: StoredTokens): Promise<void> {
     await fs.mkdir(path.dirname(this.config.tokenFilePath), { recursive: true });
+    const encrypted = encryptTokenData(tokens);
     const tmp = `${this.config.tokenFilePath}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(tokens, null, 2), 'utf8');
+    await fs.writeFile(tmp, encrypted, 'utf8');
     await fs.rename(tmp, this.config.tokenFilePath);
   }
 

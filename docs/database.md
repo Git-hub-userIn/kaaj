@@ -102,3 +102,46 @@ All database connection strings derive from `.env` (`DATABASE_URL`). Passwords a
 - `bun run db:seed:big`: Seeds large dataset (8 categories, 250 entries, three 50,000-word documents). Refuses non-empty DB unless `--force`.
 - `bun run db:studio`: Starts Prisma Studio on localhost:5555.
 - `bun run db:import-files`: Migrates old file store (`data/db-store.json`) into PostgreSQL with pre-import backup and strict canonical JSON verification per entry.
+
+---
+
+## 7. User Isolation Architecture
+
+### 7.1 Database Schema Additions
+Every persistent entity attaches a `userId` foreign key referencing the `User` table:
+1. **User**: `id` (PK, string), `email` (unique), `name`, `createdAt`, `updatedAt`.
+2. **Category**: `userId` (FK -> User.id, indexed).
+3. **Entry**: `userId` (FK -> User.id, indexed).
+4. **Chunk**: `userId` (FK -> User.id, indexed). Composite PK is `(userId, entryId, id)`.
+5. **EntryManifest**: `userId` (FK -> User.id, indexed). Unique constraint on `(userId, entryId)`.
+6. **AssetMeta**: `userId` (FK -> User.id, indexed). Unique constraint on `(userId, id)`.
+7. **MaintenanceState**: `userId` (FK -> User.id, PK or indexed).
+8. **JobLease**: `userId` (FK -> User.id, composite PK `(userId, name)`).
+
+### 7.2 Data Migration and Backfill
+The migration creates the default user `dev-owner-user` (`email: dev@kaaj.local`).
+All existing records backfill with `userId = 'dev-owner-user'` before applying `NOT NULL` constraints.
+
+---
+
+## 8. Prisma Client Extension vs. PostgreSQL Row Level Security (RLS)
+
+### 8.1 Architectural Selection: Prisma Client Extension
+User isolation uses a scoped Prisma client created via `forUser(userId)`:
+1. **Implementation**: The extension hooks into `query.$allModels.$allOperations`.
+2. **Read Injections**: Automatically injects `{ userId }` into query `where` clauses (`findFirst`, `findMany`, `count`, `aggregate`).
+3. **Write Injections**: Automatically injects `{ userId }` into mutation `data` objects (`create`, `createMany`, `update`, `upsert`, `delete`).
+4. **Primary Key Mapping**: Translates single-record lookups to `findFirst({ where: { id, userId } })`.
+5. **Encapsulation**: The base `PrismaClient` is not exported from `apps/api/src/db/client.ts`. Services only receive scoped clients.
+
+### 8.2 Why Prisma Client Extension Instead of PostgreSQL RLS
+1. **Connection Pooling**: PostgreSQL connection pooling (`pg.Pool`) reuses physical TCP connections. Setting session configuration (`SET LOCAL app.current_user_id`) requires transaction wrapping on every single read query.
+2. **Portability & Type Safety**: Prisma Client Extensions execute directly in TypeScript with complete type safety.
+3. **Future Hardening**: We will add PostgreSQL RLS as defense-in-depth in a later hardening phase.
+
+### 8.3 Raw SQL Isolation in Hot Paths
+Raw SQL statements in `apps/api/src/db/hot-paths.ts` require an explicit `userId` parameter:
+- `hotPathVersionCheckedUpdateEntry(prisma, { userId, id, ... })`: Adds `WHERE id = $1 AND userId = $2 AND version = $3`.
+- `hotPathSaveChunkedEntry(prisma, { userId, entryId, ... })`: Verifies entry ownership with `WHERE id = $1 AND userId = $2 FOR UPDATE`. Writes chunks and manifest with `userId`.
+- `JobLeaseManager`: Scopes leases by `userId` and `leaseName`.
+- `queryRowForUpdate(prisma, tableName, id, userId)`: Adds `WHERE id = $1 AND userId = $2 FOR UPDATE`.

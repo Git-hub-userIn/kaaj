@@ -2,7 +2,7 @@ import 'dotenv/config';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { getPrismaClient, closeDb } from '../apps/api/src/db/client.js';
+import { forUser, closeDb } from '../apps/api/src/db/client.js';
 import { hotPathSaveChunkedEntry } from '../apps/api/src/db/hot-paths.js';
 import {
   calculateWeight,
@@ -20,7 +20,17 @@ const SAMPLE_PARAGRAPHS = [
 ];
 
 export async function runBigSeed(targetDbUrl?: string, force = false): Promise<void> {
-  const prisma = getPrismaClient(targetDbUrl);
+  const prisma = forUser('dev-owner-user', targetDbUrl);
+
+  await prisma.user.upsert({
+    where: { id: 'dev-owner-user' },
+    create: {
+      id: 'dev-owner-user',
+      email: 'dev@kaaj.local',
+      name: 'Dev Owner',
+    },
+    update: {},
+  });
 
   const existingCategories = await prisma.category.count();
   const existingEntries = await prisma.entry.count();
@@ -122,6 +132,7 @@ export async function runBigSeed(targetDbUrl?: string, force = false): Promise<v
     });
 
     await hotPathSaveChunkedEntry(prisma, {
+      userId: 'dev-owner-user',
       entryId,
       expectedVersion: 1,
       manifest,

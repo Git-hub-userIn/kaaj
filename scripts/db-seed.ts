@@ -2,7 +2,7 @@ import 'dotenv/config';
 import sharp from 'sharp';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getPrismaClient, closeDb } from '../apps/api/src/db/client.js';
+import { forUser, closeDb } from '../apps/api/src/db/client.js';
 import { LocalDiskAssetStore } from '../apps/api/src/stores/asset-store.js';
 import { hotPathSaveChunkedEntry } from '../apps/api/src/db/hot-paths.js';
 import {
@@ -24,9 +24,20 @@ export interface SeedOptions {
 }
 
 export async function runSeed(targetDbUrl?: string, force = false): Promise<void> {
-  const prisma = getPrismaClient(targetDbUrl);
-  const assetStore = new LocalDiskAssetStore(storageDir, prisma);
+  const prisma = forUser('dev-owner-user', targetDbUrl);
+  const assetStore = new LocalDiskAssetStore(storageDir);
   await assetStore.init();
+
+  // Ensure default seed user exists
+  await prisma.user.upsert({
+    where: { id: 'dev-owner-user' },
+    create: {
+      id: 'dev-owner-user',
+      email: 'dev@kaaj.local',
+      name: 'Dev Owner',
+    },
+    update: {},
+  });
 
   const existingCategories = await prisma.category.count();
   const existingEntries = await prisma.entry.count();
@@ -210,6 +221,7 @@ export async function runSeed(targetDbUrl?: string, force = false): Promise<void
     });
 
     await hotPathSaveChunkedEntry(prisma, {
+      userId: 'dev-owner-user',
       entryId: spec.id,
       expectedVersion: 1,
       manifest,

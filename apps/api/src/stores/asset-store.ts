@@ -3,8 +3,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import sharp from 'sharp';
-import type { PrismaClient } from '../generated/client/index.js';
-import { prisma as defaultPrisma } from '../db/client.js';
+import { forUser, type ScopedPrismaClient } from '../db/client.js';
 
 export interface AssetRecord {
   id: string;
@@ -16,9 +15,12 @@ export interface AssetRecord {
   originalName?: string;
   checksum: string;
   createdAt: string;
+  userId?: string;
 }
 
-export interface AssetStore {
+export const MAX_USER_STORAGE_BYTES = 500 * 1024 * 1024; // 500 MB quota per user
+
+export interface ScopedAssetStore {
   put(buffer: Buffer, mime: string, originalName?: string): Promise<{ asset: AssetRecord; thumb320: Buffer; thumb960: Buffer }>;
   get(storageKey: string): Promise<Buffer | null>;
   getThumb(id: string, size: '320' | '960'): Promise<Buffer | null>;
@@ -28,152 +30,190 @@ export interface AssetStore {
   getAllRecords(): Promise<AssetRecord[]>;
 }
 
-export class LocalDiskAssetStore implements AssetStore {
+export class LocalDiskAssetStore {
   private baseDir: string;
-  private thumbsDir: string;
-  private prisma: PrismaClient;
-  private initialized = false;
 
-  constructor(baseDir: string, prismaClient?: PrismaClient) {
+  constructor(baseDir: string) {
     this.baseDir = baseDir;
-    this.thumbsDir = path.join(baseDir, 'thumbs');
-    this.prisma = prismaClient || defaultPrisma;
   }
 
-  async init(): Promise<void> {
-    if (this.initialized) return;
-    await fs.mkdir(this.baseDir, { recursive: true });
-    await fs.mkdir(this.thumbsDir, { recursive: true });
-    this.initialized = true;
+  private getUserVaultDir(userId: string): string {
+    const parentDir = path.basename(this.baseDir) === 'storage' ? path.dirname(this.baseDir) : this.baseDir;
+    return path.join(parentDir, 'vault', userId);
   }
 
-  async put(buffer: Buffer, mime: string, originalName?: string): Promise<{ asset: AssetRecord; thumb320: Buffer; thumb960: Buffer }> {
-    await this.init();
+  private getUserThumbsDir(userId: string): string {
+    return path.join(this.getUserVaultDir(userId), 'thumbs');
+  }
 
-    // Verify magic bytes
-    const isPng = buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
-    const isJpeg = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
-    const isWebp = buffer.toString('utf8', 8, 12) === 'WEBP';
-    const isGif = buffer.toString('utf8', 0, 3) === 'GIF';
+  async initUserVault(userId: string): Promise<void> {
+    await fs.mkdir(this.getUserVaultDir(userId), { recursive: true });
+    await fs.mkdir(this.getUserThumbsDir(userId), { recursive: true });
+  }
 
-    if (!isPng && !isJpeg && !isWebp && !isGif) {
-      throw new Error('Unsupported image format. Allowed formats: JPEG, PNG, WebP, GIF.');
-    }
+  forUser(userId: string, prismaOverride?: ScopedPrismaClient): ScopedAssetStore {
+    const prisma = prismaOverride || forUser(userId);
+    const userVaultDir = this.getUserVaultDir(userId);
+    const userThumbsDir = this.getUserThumbsDir(userId);
 
-    const id = `asset_${crypto.randomUUID()}`;
-    const ext = isPng ? 'png' : isJpeg ? 'jpg' : isWebp ? 'webp' : 'gif';
-    const storageKey = `${id}.${ext}`;
-    const filePath = path.join(this.baseDir, storageKey);
+    return {
+      put: async (buffer: Buffer, mime: string, originalName?: string) => {
+        await this.initUserVault(userId);
 
-    // Compute checksum
-    const checksum = crypto.createHash('sha256').update(buffer).digest('hex');
+        // Verify magic bytes
+        const isPng = buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+        const isJpeg = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+        const isWebp = buffer.toString('utf8', 8, 12) === 'WEBP';
+        const isGif = buffer.toString('utf8', 0, 3) === 'GIF';
 
-    // Extract image dimensions and strip EXIF using sharp
-    const metadata = await sharp(buffer).metadata();
-    const cleanBuffer = await sharp(buffer).rotate().toBuffer(); // strip exif and auto-orient
+        if (!isPng && !isJpeg && !isWebp && !isGif) {
+          throw new Error('Unsupported image format. Allowed formats: JPEG, PNG, WebP, GIF.');
+        }
 
-    // Generate WebP thumbnails (320px and 960px)
-    const thumb320 = await sharp(cleanBuffer).resize(320).webp({ quality: 80 }).toBuffer();
-    const thumb960 = await sharp(cleanBuffer).resize(960).webp({ quality: 80 }).toBuffer();
+        // Check user quota (500 MB)
+        const aggregate = await prisma.assetMeta.aggregate({
+          _sum: { bytes: true },
+          where: { userId },
+        });
+        const currentBytes = aggregate._sum.bytes || 0;
+        if (currentBytes + buffer.length > MAX_USER_STORAGE_BYTES) {
+          const err: any = new Error('Upload quota exceeded (500 MB limit).');
+          err.statusCode = 413;
+          throw err;
+        }
 
-    // Write original and thumbnails to disk
-    await fs.writeFile(filePath, cleanBuffer);
-    await fs.writeFile(path.join(this.thumbsDir, `${id}_320.webp`), thumb320);
-    await fs.writeFile(path.join(this.thumbsDir, `${id}_960.webp`), thumb960);
+        const id = `asset_${crypto.randomUUID()}`;
+        const ext = isPng ? 'png' : isJpeg ? 'jpg' : isWebp ? 'webp' : 'gif';
+        const storageKey = `${id}.${ext}`;
+        const filePath = path.join(userVaultDir, storageKey);
 
-    const asset: AssetRecord = {
-      id,
-      storageKey,
-      mime: isPng ? 'image/png' : isJpeg ? 'image/jpeg' : isWebp ? 'image/webp' : 'image/gif',
-      bytes: cleanBuffer.length,
-      width: metadata.width,
-      height: metadata.height,
-      originalName,
-      checksum,
-      createdAt: new Date().toISOString(),
-    };
+        const checksum = crypto.createHash('sha256').update(buffer).digest('hex');
+        const metadata = await sharp(buffer).metadata();
+        const cleanBuffer = await sharp(buffer).rotate().toBuffer(); // strip exif
 
-    // Store metadata in PostgreSQL
-    await this.prisma.assetMeta.upsert({
-      where: { id },
-      create: {
-        id: asset.id,
-        storageKey: asset.storageKey,
-        mime: asset.mime,
-        bytes: asset.bytes,
-        width: asset.width ?? null,
-        height: asset.height ?? null,
-        originalName: asset.originalName ?? null,
-        checksum: asset.checksum,
-        createdAt: new Date(asset.createdAt),
+        const thumb320 = await sharp(cleanBuffer).resize(320).webp({ quality: 80 }).toBuffer();
+        const thumb960 = await sharp(cleanBuffer).resize(960).webp({ quality: 80 }).toBuffer();
+
+        await fs.writeFile(filePath, cleanBuffer);
+        await fs.writeFile(path.join(userThumbsDir, `${id}_320.webp`), thumb320);
+        await fs.writeFile(path.join(userThumbsDir, `${id}_960.webp`), thumb960);
+
+        const asset: AssetRecord = {
+          id,
+          storageKey,
+          mime: isPng ? 'image/png' : isJpeg ? 'image/jpeg' : isWebp ? 'image/webp' : 'image/gif',
+          bytes: cleanBuffer.length,
+          width: metadata.width,
+          height: metadata.height,
+          originalName,
+          checksum,
+          createdAt: new Date().toISOString(),
+          userId,
+        };
+
+        await prisma.assetMeta.upsert({
+          where: { id },
+          create: {
+            id: asset.id,
+            userId,
+            storageKey: asset.storageKey,
+            mime: asset.mime,
+            bytes: asset.bytes,
+            width: asset.width ?? null,
+            height: asset.height ?? null,
+            originalName: asset.originalName ?? null,
+            checksum: asset.checksum,
+            createdAt: new Date(asset.createdAt),
+          },
+          update: {
+            storageKey: asset.storageKey,
+            mime: asset.mime,
+            bytes: asset.bytes,
+            width: asset.width ?? null,
+            height: asset.height ?? null,
+            originalName: asset.originalName ?? null,
+            checksum: asset.checksum,
+          },
+        });
+
+        return { asset, thumb320, thumb960 };
       },
-      update: {
-        storageKey: asset.storageKey,
-        mime: asset.mime,
-        bytes: asset.bytes,
-        width: asset.width ?? null,
-        height: asset.height ?? null,
-        originalName: asset.originalName ?? null,
-        checksum: asset.checksum,
+
+      get: async (storageKey: string): Promise<Buffer | null> => {
+        try {
+          // Ownership verification: ensure storageKey belongs to userId
+          const meta = await prisma.assetMeta.findFirst({
+            where: { storageKey, userId },
+          });
+          if (!meta) return null;
+
+          const candidates = [
+            path.join(userVaultDir, storageKey),
+            path.join(this.baseDir, storageKey), // fallback legacy path
+          ];
+          for (const p of candidates) {
+            if (fsSync.existsSync(p)) {
+              return await fs.readFile(p);
+            }
+          }
+          return null;
+        } catch {
+          return null;
+        }
       },
-    });
 
-    return { asset, thumb320, thumb960 };
-  }
+      getThumb: async (id: string, size: '320' | '960'): Promise<Buffer | null> => {
+        try {
+          // Ownership verification: ensure id belongs to userId
+          const record = await prisma.assetMeta.findFirst({
+            where: { id, userId },
+          });
+          if (!record) return null;
 
-  async get(storageKey: string): Promise<Buffer | null> {
-    try {
-      const filePath = path.join(this.baseDir, storageKey);
-      return await fs.readFile(filePath);
-    } catch {
-      return null;
-    }
-  }
+          const thumbPath = path.join(userThumbsDir, `${id}_${size}.webp`);
+          const legacyThumbPath = path.join(this.baseDir, 'thumbs', `${id}_${size}.webp`);
 
-  async getThumb(id: string, size: '320' | '960'): Promise<Buffer | null> {
-    try {
-      const filePath = path.join(this.thumbsDir, `${id}_${size}.webp`);
-      try {
-        return await fs.readFile(filePath);
-      } catch {
-        // On-demand generation if thumbnail is missing on disk
-        const record = await this.getRecord(id);
-        if (!record) return null;
-        const orig = await this.get(record.storageKey);
-        if (!orig) return null;
-        const targetWidth = size === '960' ? 960 : 320;
-        const generated = await sharp(orig).resize(targetWidth).webp({ quality: 80 }).toBuffer();
-        await fs.writeFile(filePath, generated).catch(() => {});
-        return generated;
-      }
-    } catch {
-      return null;
-    }
-  }
+          if (fsSync.existsSync(thumbPath)) {
+            return await fs.readFile(thumbPath);
+          }
+          if (fsSync.existsSync(legacyThumbPath)) {
+            return await fs.readFile(legacyThumbPath);
+          }
 
-  async delete(storageKey: string): Promise<void> {
-    const filePath = path.join(this.baseDir, storageKey);
-    await fs.unlink(filePath).catch(() => {});
-    await this.prisma.assetMeta.deleteMany({
-      where: { storageKey },
-    }).catch(() => {});
-  }
+          // On-demand generation if missing
+          const orig = await this.forUser(userId, prisma).get(record.storageKey);
+          if (!orig) return null;
 
-  async exists(storageKey: string): Promise<boolean> {
-    try {
-      await fs.access(path.join(this.baseDir, storageKey));
-      return true;
-    } catch {
-      return false;
-    }
-  }
+          const targetWidth = size === '960' ? 960 : 320;
+          const generated = await sharp(orig).resize(targetWidth).webp({ quality: 80 }).toBuffer();
+          await fs.writeFile(thumbPath, generated).catch(() => {});
+          return generated;
+        } catch {
+          return null;
+        }
+      },
 
-  async getRecord(id: string): Promise<AssetRecord | null> {
-    try {
-      const meta = await this.prisma.assetMeta.findUnique({
-        where: { id },
-      });
-      if (meta) {
+      delete: async (storageKey: string): Promise<void> => {
+        const filePath = path.join(userVaultDir, storageKey);
+        await fs.unlink(filePath).catch(() => {});
+        await prisma.assetMeta.deleteMany({
+          where: { storageKey, userId },
+        }).catch(() => {});
+      },
+
+      exists: async (storageKey: string): Promise<boolean> => {
+        const meta = await prisma.assetMeta.findFirst({
+          where: { storageKey, userId },
+        });
+        if (!meta) return false;
+        return fsSync.existsSync(path.join(userVaultDir, storageKey)) || fsSync.existsSync(path.join(this.baseDir, storageKey));
+      },
+
+      getRecord: async (id: string): Promise<AssetRecord | null> => {
+        const meta = await prisma.assetMeta.findFirst({
+          where: { id, userId },
+        });
+        if (!meta) return null;
         return {
           id: meta.id,
           storageKey: meta.storageKey,
@@ -184,49 +224,53 @@ export class LocalDiskAssetStore implements AssetStore {
           originalName: meta.originalName ?? undefined,
           checksum: meta.checksum,
           createdAt: meta.createdAt.toISOString(),
+          userId: meta.userId,
         };
-      }
-    } catch {
-      // ignore db errors in fallback
-    }
+      },
 
-    for (const ext of ['png', 'jpg', 'webp', 'gif']) {
-      const storageKey = `${id}.${ext}`;
-      const filePath = path.join(this.baseDir, storageKey);
-      try {
-        if (fsSync.existsSync(filePath)) {
-          const mime = ext === 'png' ? 'image/png' : ext === 'jpg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/gif';
-          const stat = fsSync.statSync(filePath);
-          return {
-            id,
-            storageKey,
-            mime,
-            bytes: stat.size,
-            checksum: '',
-            createdAt: stat.birthtime.toISOString(),
-          };
-        }
-      } catch {
-        // ignore
-      }
-    }
-    return null;
+      getAllRecords: async (): Promise<AssetRecord[]> => {
+        const metas = await prisma.assetMeta.findMany({
+          where: { userId },
+          orderBy: { createdAt: 'asc' },
+        });
+        return metas.map((meta: any) => ({
+          id: meta.id,
+          storageKey: meta.storageKey,
+          mime: meta.mime,
+          bytes: meta.bytes,
+          width: meta.width ?? undefined,
+          height: meta.height ?? undefined,
+          originalName: meta.originalName ?? undefined,
+          checksum: meta.checksum,
+          createdAt: meta.createdAt.toISOString(),
+          userId: meta.userId,
+        }));
+      },
+    };
   }
 
-  async getAllRecords(): Promise<AssetRecord[]> {
-    const metas = await this.prisma.assetMeta.findMany({
-      orderBy: { createdAt: 'asc' },
-    });
-    return metas.map((meta) => ({
-      id: meta.id,
-      storageKey: meta.storageKey,
-      mime: meta.mime,
-      bytes: meta.bytes,
-      width: meta.width ?? undefined,
-      height: meta.height ?? undefined,
-      originalName: meta.originalName ?? undefined,
-      checksum: meta.checksum,
-      createdAt: meta.createdAt.toISOString(),
-    }));
+  // Backwards-compatible methods defaulting to 'dev-owner-user'
+  async put(buffer: Buffer, mime: string, originalName?: string) {
+    return this.forUser('dev-owner-user').put(buffer, mime, originalName);
+  }
+
+  async get(storageKey: string) {
+    return this.forUser('dev-owner-user').get(storageKey);
+  }
+
+  async getThumb(id: string, size: '320' | '960') {
+    return this.forUser('dev-owner-user').getThumb(id, size);
+  }
+
+  async getRecord(id: string) {
+    return this.forUser('dev-owner-user').getRecord(id);
+  }
+
+  async getAllRecords() {
+    return this.forUser('dev-owner-user').getAllRecords();
+  }
+
+  async init(): Promise<void> {
+    await this.initUserVault('dev-owner-user');
   }
 }

@@ -474,6 +474,24 @@ Real Google Drive testing revealed performance bottlenecks on small incremental 
 - It compares canonical JSON for all entries, SHA-256 for all visual assets, and category configurations.
 - Verification never modifies live vault files.
 
+---
+
+## 10. Multi-User Storage & Backup Isolation
+
+### 10.1 Local Vault and Asset Scoping
+- The local vault separates assets and documents by user ID: `data/vault/<userId>/` and `data/storage/<userId>/`.
+- The asset store checks that the requested asset belongs to the caller's `userId` before serving bytes or generating WebP thumbnails.
+- Cross-user asset accesses return 404 or 403.
+
+### 10.2 Per-User Google Drive Backups & Token Encryption
+- Google Drive credentials store per-user at `data/users/<userId>/google-oauth.enc`.
+- The backend encrypts tokens at rest using AES-256-GCM with a server secret (`TOKEN_ENCRYPTION_KEY` or `DEV_ENCRYPTION_SECRET`).
+- Backups on Google Drive upload into user-specific folder trees: `Kaaj/users/<userId>/...`.
+
+### 10.3 Per-User Quota and Rate Limiting
+- The backend enforces rate limits per `userId` (default: 60 requests/minute for mutating operations).
+- An upload quota checks total asset storage per user (default limit: 500 MB). Uploads that exceed quota return 413 Payload Too Large.
+
 
 
 

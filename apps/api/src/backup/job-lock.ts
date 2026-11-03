@@ -1,7 +1,6 @@
 import type { BackupTarget } from './backup-target.js';
-import { prisma as defaultPrisma } from '../db/client.js';
+import { forUser, type ScopedPrismaClient } from '../db/client.js';
 import { JobLeaseManager } from '../db/hot-paths.js';
-import type { PrismaClient } from '../generated/client/index.js';
 
 export interface LockData {
   holder: string;
@@ -19,9 +18,11 @@ export class JobLock {
   private leaseManager: JobLeaseManager;
   private activeToken: number | null = null;
   private activeHolder: string | null = null;
+  private userId: string;
 
-  constructor(_target?: BackupTarget, prisma?: PrismaClient) {
-    this.leaseManager = new JobLeaseManager(prisma || defaultPrisma, 'backup_maintenance');
+  constructor(_target?: BackupTarget, prisma?: ScopedPrismaClient | any, userId: string = 'dev-owner-user') {
+    this.userId = userId;
+    this.leaseManager = new JobLeaseManager(prisma || forUser(userId), userId, 'backup_maintenance');
   }
 
   /**

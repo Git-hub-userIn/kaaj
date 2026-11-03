@@ -4,7 +4,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { getPrismaClient, closeDb } from '../apps/api/src/db/client.js';
+import { forUser, closeDb } from '../apps/api/src/db/client.js';
 import {
   canonicalDocJson,
   migrateDocumentToV2,
@@ -138,7 +138,17 @@ export async function importFilesToPostgres(options: ImportOptions = {}): Promis
   }
 
   // 5. Connect and Write to PostgreSQL via Prisma
-  const prisma = getPrismaClient(options.targetDbUrl);
+  const prisma = forUser('dev-owner-user', options.targetDbUrl);
+
+  await prisma.user.upsert({
+    where: { id: 'dev-owner-user' },
+    create: {
+      id: 'dev-owner-user',
+      email: 'dev@kaaj.local',
+      name: 'Dev Owner',
+    },
+    update: {},
+  });
 
   try {
     // 5a. Upsert Categories
@@ -301,9 +311,10 @@ export async function importFilesToPostgres(options: ImportOptions = {}): Promis
         const mRaw = await fs.readFile(maintPath, 'utf8');
         const mState = JSON.parse(mRaw);
         await prisma.maintenanceState.upsert({
-          where: { id: 'singleton' },
+          where: { userId_id: { userId: 'dev-owner-user', id: 'singleton' } },
           create: {
             id: 'singleton',
+            userId: 'dev-owner-user',
             lastBackupAt: mState.lastBackupAt ? new Date(mState.lastBackupAt) : null,
             lastPruneAt: mState.lastPruneAt ? new Date(mState.lastPruneAt) : null,
             lastResult: mState.lastResult ?? null,

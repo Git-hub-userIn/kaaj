@@ -40,7 +40,7 @@ function getSharpInstance() {
 }
 
 import { importFilesToPostgres } from './db-import-files.js';
-import { getPrismaClient, closeDb } from '../apps/api/src/db/client.js';
+import { forUser, closeDb } from '../apps/api/src/db/client.js';
 
 export interface RestoreOptions {
   snapshotId?: string; // Default: 'latest'
@@ -390,7 +390,7 @@ async function loadEntryDocFromDir(entryDir: string): Promise<DocumentEnvelopeV2
 
   // 8. Restore into database if requested
   if (options.restoreToDb || options.targetDbUrl) {
-    const prisma = getPrismaClient(options.targetDbUrl);
+    const prisma = forUser('dev-owner-user', options.targetDbUrl);
     const existingCats = await prisma.category.count();
     const existingEntries = await prisma.entry.count();
     if ((existingCats > 0 || existingEntries > 0) && !options.force) {

@@ -15,4 +15,5 @@ export interface BackupTarget {
   delete?(relativePath: string): Promise<void>;
   exists?(relativePath: string): Promise<boolean>;
   has?(relativePath: string, checksum: string): Promise<boolean>;
+  forUser?(userId: string): BackupTarget;
 }
