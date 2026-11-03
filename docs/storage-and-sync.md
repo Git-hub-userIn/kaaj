@@ -502,6 +502,24 @@ Real Google Drive testing revealed performance bottlenecks on small incremental 
 - The backend enforces rate limits per `userId` (default: 60 requests/minute for mutating operations).
 - An upload quota checks total asset storage per user (default limit: 500 MB). Uploads that exceed quota return 413 Payload Too Large.
 
+---
+
+## 11. Archive Export and Import
+
+### 11.1 ZIP Export & Round Trip
+- `GET /export/zip` generates an unencrypted ZIP archive containing:
+  - `manifest.json`: Archive catalog and metadata.
+  - `categories.json`: Category definitions.
+  - `entries/<id>.json`: Canonical document chunks and spines.
+  - `markdown/<id>.md`: Human-readable Markdown with YAML frontmatter.
+  - `attachments/<assetId>.<ext>`: Binary image attachments.
+- `POST /import/zip` unpacks the archive and writes entities scoped to the authenticated `userId`.
+
+### 11.2 Markdown & Obsidian Integration
+- `GET /entries/:id/export/markdown` exports an entry as Markdown with YAML frontmatter.
+- `POST /import/markdown` imports Markdown documents, parsing frontmatter properties, `#tags`, and `[[wikilinks]]`.
+
+
 
 
 

@@ -15,6 +15,7 @@ import {
 } from '@kaaj/doc-model';
 import { renderDocumentToPdf } from './services/pdf-service.js';
 import { CategoriesService } from './services/categories-service.js';
+import { ImportExportService } from './services/import-export-service.js';
 import { WsSyncService } from './services/ws-sync-service.js';
 import { createBunWebSocket } from 'hono/bun';
 import { authGuard } from './auth/guard.js';
@@ -728,6 +729,119 @@ app.post('/export/pdf', async (c) => {
     });
   } catch (err: any) {
     return c.json({ error: err.message || 'PDF export failed' }, 500);
+  }
+});
+
+// Import & Export Endpoints (User-Scoped)
+app.get('/export/zip', async (c) => {
+  try {
+    const userId = getUserId(c);
+    const svc = new ImportExportService(userId, assetStore);
+    const zipBuffer = await svc.exportZip();
+
+    return new Response(new Uint8Array(zipBuffer), {
+      headers: {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename="kaaj-vault-${userId}.zip"`,
+      },
+    });
+  } catch (err: any) {
+    return c.json({ error: err.message || 'ZIP export failed' }, 500);
+  }
+});
+
+app.get('/entries/:id/export/markdown', async (c) => {
+  const id = c.req.param('id');
+  const userId = getUserId(c);
+  const svc = new ImportExportService(userId, assetStore);
+  const markdown = await svc.exportEntryMarkdown(id);
+  if (!markdown) {
+    return c.json({ error: 'Entry not found' }, 404);
+  }
+
+  return new Response(markdown, {
+    headers: {
+      'Content-Type': 'text/markdown; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${id}.md"`,
+    },
+  });
+});
+
+app.post('/import/zip', async (c) => {
+  try {
+    const userId = getUserId(c);
+    const contentType = c.req.header('content-type') || '';
+    let buffer: Buffer;
+
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await c.req.formData();
+      const file = formData.get('file');
+      if (!file || !(file instanceof Blob)) {
+        return c.json({ error: 'Missing zip file in multipart form field "file"' }, 400);
+      }
+      buffer = Buffer.from(await file.arrayBuffer());
+    } else {
+      const raw = await c.req.arrayBuffer();
+      buffer = Buffer.from(raw);
+    }
+
+    if (buffer.length === 0) {
+      return c.json({ error: 'Empty zip payload' }, 400);
+    }
+
+    const svc = new ImportExportService(userId, assetStore);
+    const result = await svc.importZip(buffer);
+    return c.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error('Import zip error:', err);
+    return c.json({ error: err.message || 'ZIP import failed' }, 500);
+  }
+});
+
+app.post('/import/markdown', async (c) => {
+  try {
+    const userId = getUserId(c);
+    let categoryId: string | undefined;
+    let markdown: string | undefined;
+    let filename: string | undefined;
+
+    const contentType = c.req.header('content-type') || '';
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await c.req.formData();
+      categoryId = formData.get('categoryId') as string;
+      filename = (formData.get('file') as File)?.name;
+      const file = formData.get('file');
+      if (file && file instanceof Blob) {
+        markdown = await file.text();
+      }
+    } else {
+      const body = await c.req.json();
+      categoryId = body.categoryId;
+      markdown = body.markdown;
+      filename = body.filename;
+    }
+
+    if (!markdown) {
+      return c.json({ error: 'Markdown content is required' }, 400);
+    }
+
+    // Default to first user category if not specified
+    const catSvc = categoriesService.forUser(userId);
+    if (!categoryId) {
+      const cats = await catSvc.listCategories();
+      if (cats.length > 0) {
+        categoryId = cats[0].id;
+      } else {
+        const created = await catSvc.createCategory('Imported Notes');
+        categoryId = created.id;
+      }
+    }
+
+    const svc = new ImportExportService(userId, assetStore);
+    const result = await svc.importMarkdown(categoryId, markdown, filename);
+    return c.json({ success: true, ...result }, 201);
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Markdown import failed' }, 500);
   }
 });
 

@@ -498,4 +498,19 @@ kaaj/
 - `GET /shared/:token`: Public unauthenticated endpoint returning read-only entry content.
 - Cross-user revocation or inspection attempts return 404 or 403.
 
+## 25. Archive Import and Export Architecture (LOCKED)
+
+### 25.1 ZIP Archive Round Trip
+- Export all user categories, entries, chunks, and visual attachments into a structured ZIP archive via `GET /export/zip`.
+- The archive contains `manifest.json`, `categories.json`, `entries/<id>.json`, `markdown/<id>.md`, and `attachments/<assetId>.<ext>`.
+- Import full archive back via `POST /import/zip`.
+- The importer restores categories, entries, and assets under the authenticated `userId`.
+
+### 25.2 Markdown and Obsidian Import/Export
+- Export single entries with YAML frontmatter via `GET /entries/:id/export/markdown`.
+- Import standard Markdown or Obsidian vaults via `POST /import/markdown`.
+- Frontmatter preserves title, tags, creation date, and metadata.
+- Body parser converts markdown syntax (headings, task lists, code blocks, wikilinks) into Kaaj blocks.
+
+
 
