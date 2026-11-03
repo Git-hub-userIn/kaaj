@@ -1,8 +1,13 @@
 import React from 'react';
 import { COLOR_TOKENS, TYPOGRAPHY_TOKENS, SPACING_TOKENS, RADIUS_TOKENS, CURRENT_USER } from '@kaaj/design';
+import { Search } from 'lucide-react';
 import { GlobalBackupStatus } from '../backup/GlobalBackupStatus';
 
 export const HomeHeader: React.FC = () => {
+  const triggerPalette = () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+  };
+
   return (
     <header
       style={{
@@ -58,8 +63,42 @@ export const HomeHeader: React.FC = () => {
         </div>
       </div>
 
-      {/* Global backup status + User avatar */}
+      {/* Search Button + Global backup status + User avatar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <button
+          type="button"
+          data-testid="open-command-palette-btn"
+          onClick={triggerPalette}
+          aria-label="Search entries (Cmd+K)"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '6px 12px',
+            backgroundColor: COLOR_TOKENS.paperWarm,
+            border: `1px solid ${COLOR_TOKENS.border}`,
+            borderRadius: RADIUS_TOKENS.sm,
+            color: COLOR_TOKENS.inkMuted,
+            fontSize: '13px',
+            fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+            cursor: 'pointer',
+          }}
+        >
+          <Search size={14} aria-hidden="true" />
+          <span>Search...</span>
+          <kbd
+            style={{
+              fontSize: '10px',
+              padding: '1px 5px',
+              border: `1px solid ${COLOR_TOKENS.border}`,
+              borderRadius: RADIUS_TOKENS.xs,
+              backgroundColor: COLOR_TOKENS.paperSubtle,
+            }}
+          >
+            ⌘K
+          </kbd>
+        </button>
+
         <GlobalBackupStatus />
 
         <div

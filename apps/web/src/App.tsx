@@ -13,6 +13,8 @@ import '@fontsource/playfair-display/700.css';
 
 import { HomeScreen } from './features/home/HomeScreen.js';
 import { CategoryStackScreen } from './features/category/CategoryStackScreen.js';
+import { CommandPalette } from './features/search/CommandPalette.js';
+import { API_BASE_URL, getAuthHeaders } from './config/api.js';
 
 // Code-split entry editor so home and catalogue stack screens stay light
 const LazyEntryEditor = React.lazy(() =>
@@ -21,7 +23,52 @@ const LazyEntryEditor = React.lazy(() =>
 
 export const App: React.FC = () => {
   const [currentPath, setCurrentPath] = useState<string>(() => window.location.pathname);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const isTestMode = (import.meta.env as any).APP_MODE === 'test';
+
+  // Global Cmd+K / Ctrl+K keyboard shortcut
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const handleCreateNewEntry = async () => {
+    try {
+      const catRes = await fetch(`${API_BASE_URL}/categories`, { headers: getAuthHeaders() });
+      let categoryId = 'cat_ideas';
+      if (catRes.ok) {
+        const cats = await catRes.json();
+        if (Array.isArray(cats) && cats.length > 0) {
+          categoryId = cats[0].id;
+        }
+      }
+
+      const res = await fetch(`${API_BASE_URL}/entries`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          categoryId,
+          title: 'Untitled',
+          doc: {
+            schemaVersion: 2,
+            doc: { type: 'doc', content: [{ type: 'paragraph' }] },
+          },
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        navigate(`/entry/${data.id}`);
+      }
+    } catch (err) {
+      console.error('Failed to create new entry:', err);
+    }
+  };
 
   useEffect(() => {
     const handlePopState = () => {
@@ -97,6 +144,12 @@ export const App: React.FC = () => {
         </div>
       )}
       {renderContent()}
+      <CommandPalette
+        isOpen={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onNavigateToEntry={(id) => navigate(`/entry/${id}`)}
+        onNewEntry={handleCreateNewEntry}
+      />
     </>
   );
 };

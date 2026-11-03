@@ -391,3 +391,20 @@ kaaj/
 - Clamp menu position within the visible viewport bounds. Prevent overflow past the right or bottom edges.
 - Close the menu on pressing `Escape`, clicking outside, or executing any menu action.
 - Navigate menu options using the `ArrowUp` and `ArrowDown` keys. Activate selected items with `Enter`.
+
+## 19. Search & Command Palette (LOCKED)
+
+### 19.1 User-Scoped Search Endpoint
+- Provide `GET /search?q=...` endpoint on the API.
+- Execute full-text search across entry titles, category metadata, and chunk text contents using PostgreSQL `tsvector`.
+- Rank title matches highest, category matches second, and body chunk matches third.
+- Enforce strict user isolation. Inject `userId` into SQL queries. User B cannot see User A results.
+- Exclude soft-deleted entries and categories from search results.
+
+### 19.2 Command Palette Modal (Cmd/Ctrl + K)
+- Open the command palette modal with `Cmd+K` (macOS) or `Ctrl+K` (Windows/Linux).
+- Provide a dedicated search button in top-level navigation bars.
+- Display instant matching results as the user types queries.
+- Support direct keyboard navigation using `ArrowUp` and `ArrowDown`. Activate selection with `Enter`.
+- Close the palette on pressing `Escape` or clicking the backdrop.
+- Provide a "New Entry" shortcut inside the palette to create and open a new entry instantly.

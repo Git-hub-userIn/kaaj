@@ -216,6 +216,17 @@ app.get('/entries/:id', async (c) => {
   return c.json(entry);
 });
 
+// Full-Text Search (User-Scoped)
+app.get('/search', async (c) => {
+  const query = c.req.query('q') || '';
+  if (!query.trim()) {
+    return c.json([]);
+  }
+  const userId = getUserId(c);
+  const results = await categoriesService.forUser(userId).searchEntries(query);
+  return c.json(results);
+});
+
 app.post('/entries', async (c) => {
   try {
     const raw = await c.req.json();

@@ -31,6 +31,7 @@ import { forUser, type ScopedPrismaClient } from '../db/client.js';
 import {
   hotPathSaveChunkedEntry,
   hotPathVersionCheckedUpdateEntry,
+  hotPathSearchEntries,
   ConcurrencyConflictError,
 } from '../db/hot-paths.js';
 
@@ -745,5 +746,14 @@ export class CategoriesService {
       data: { deletedAt: null },
     });
     return await this.getEntry(id);
+  }
+
+  async searchEntries(query: string, limit = 20) {
+    await this.init();
+    return await hotPathSearchEntries(this.prisma, {
+      userId: this.userId,
+      query,
+      limit,
+    });
   }
 }

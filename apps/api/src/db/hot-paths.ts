@@ -342,3 +342,46 @@ export async function queryRowForUpdate<T = any>(
   }
   return rows.length > 0 ? rows[0] : null;
 }
+
+/**
+ * -----------------------------------------------------------------------------
+ * HOT PATH 5: Full-Text Search via Postgres tsvector (User-Scoped)
+ * -----------------------------------------------------------------------------
+ */
+export async function hotPathSearchEntries(
+  prisma: ScopedPrismaClient | any,
+  params: {
+    userId: string;
+    query: string;
+    limit?: number;
+  }
+) {
+  const cleanQuery = params.query.trim();
+  if (!cleanQuery) return [];
+
+  const limit = params.limit ?? 20;
+
+  return await prisma.$queryRaw`
+    SELECT
+      e.id,
+      e."categoryId",
+      e.title,
+      e."updatedAt",
+      c.title AS "categoryTitle",
+      c.color AS "categoryColor"
+    FROM "Entry" e
+    JOIN "Category" c ON e."categoryId" = c.id AND c."userId" = ${params.userId} AND c."deletedAt" IS NULL
+    LEFT JOIN "Chunk" ch ON ch."entryId" = e.id AND ch."userId" = ${params.userId}
+    WHERE e."userId" = ${params.userId}
+      AND e."deletedAt" IS NULL
+      AND (
+        to_tsvector('english', e.title) @@ plainto_tsquery('english', ${cleanQuery})
+        OR to_tsvector('english', c.title) @@ plainto_tsquery('english', ${cleanQuery})
+        OR to_tsvector('english', ch.payload::text) @@ plainto_tsquery('english', ${cleanQuery})
+        OR e.title ILIKE '%' || ${cleanQuery} || '%'
+      )
+    GROUP BY e.id, c.id
+    ORDER BY e."updatedAt" DESC
+    LIMIT ${limit};
+  `;
+}
