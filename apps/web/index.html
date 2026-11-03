@@ -49,6 +49,37 @@
       [data-focus-mode="true"] [data-testid="tags-bar"] {
         display: none !important;
       }
+      /* Accessibility: Focus visible rings */
+      :focus-visible {
+        outline: 2px solid #c25e38 !important;
+        outline-offset: 2px !important;
+      }
+      /* Accessibility: Reduced motion */
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
+      /* Skip to content link */
+      .skip-link {
+        position: absolute;
+        top: -60px;
+        left: 16px;
+        background: #c25e38;
+        color: #ffffff;
+        padding: 8px 16px;
+        font-weight: 600;
+        text-decoration: none;
+        border-radius: 4px;
+        z-index: 99999;
+        transition: top 0.15s ease;
+      }
+      .skip-link:focus {
+        top: 16px;
+      }
     </style>
     <script>
       try {

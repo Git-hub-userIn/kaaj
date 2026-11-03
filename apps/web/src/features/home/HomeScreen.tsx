@@ -136,6 +136,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
 
       {/* Main Body: Image-led category collage */}
       <main
+        id="main-content"
+        tabIndex={-1}
         style={{
           flex: 1,
           maxWidth: '1440px',

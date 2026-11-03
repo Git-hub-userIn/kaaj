@@ -1878,6 +1878,8 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
 
         {/* Body Editor Container */}
         <main
+          id="main-content"
+          tabIndex={-1}
           role="region"
           aria-label="Entry content"
           style={{

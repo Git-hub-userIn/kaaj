@@ -58,11 +58,23 @@ export const BacklinksDrawer: React.FC<BacklinksDrawerProps> = ({
     };
   }, [isOpen, entryId]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
     <div
       data-testid="backlinks-drawer"
+      role="dialog"
+      aria-label="Backlinks and Mentions"
       style={{
         position: 'fixed',
         top: 0,

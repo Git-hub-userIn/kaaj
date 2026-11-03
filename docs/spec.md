@@ -537,6 +537,27 @@ kaaj/
 - Expose `GET /entries/on-this-day` scoped strictly by `userId`.
 - Present historical entries in `[data-testid="on-this-day-widget"]`.
 
+## 27. Accessibility Pass & WCAG 2.1 AA Compliance (LOCKED)
+
+### 27.1 ARIA Semantics and Labels
+- Provide explicit `aria-label` or visible text for every interactive control (buttons, links, search triggers).
+- Modal dialogs (trash, spine customizer, share modal) declare `role="dialog"` and `aria-modal="true"`.
+- Status indicators declare `role="status"` or `aria-live="polite"`.
+
+### 27.2 Keyboard Navigation & Focus Order
+- Maintain sequential keyboard navigation through headers, category cards, and editor toolbars.
+- Support `Escape` key handling to close open overlays, drawers, and menus.
+- Provide high-contrast focus rings for keyboard-focused elements using `:focus-visible`.
+
+### 27.3 Reduced Motion
+- Respect user operating system preferences for reduced motion.
+- Apply `@media (prefers-reduced-motion: reduce)` to cancel animations and transitions.
+
+### 27.4 Color Contrast
+- Ensure all text and interactive borders meet WCAG 2.1 AA ratio (minimum 4.5:1 for body copy).
+- Maintain distinct luminance between paper backgrounds and ink typography.
+
+
 
 
 

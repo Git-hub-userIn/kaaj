@@ -119,6 +119,9 @@ export const App: React.FC = () => {
 
   return (
     <>
+      <a href="#main-content" className="skip-link" data-testid="skip-to-content">
+        Skip to content
+      </a>
       {isTestMode && (
         <div
           data-testid="test-badge"
