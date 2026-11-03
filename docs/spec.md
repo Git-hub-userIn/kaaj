@@ -370,3 +370,24 @@ kaaj/
 2. **Google Drive Auth Flow:** User OAuth2 flow with refresh token. Narrow scope (`https://www.googleapis.com/auth/drive.file`). Note on testing mode: Google Cloud projects in "Testing" mode expire refresh tokens after 7 days; project must be switched to "In Production" status.
 3. **Backup Policy:** Periodic (every 15 minutes, only if content changed), on entry close, and manual user trigger.
 4. **Chunk Size Thresholds:** DEFAULT 50 blocks / 64 KB split boundary. To be tuned in Step 3.
+
+## 18. Custom Context Menu (LOCKED)
+
+### 18.1 Trigger & Interception Rules
+- Intercept right-click (`contextmenu`) events inside the editor and page canvas.
+- Call `preventDefault()` and open the custom context menu at the cursor coordinates.
+- Preserve the native browser context menu when the user presses `Shift + Right-Click`.
+- Preserve the native browser context menu inside native `<input>` and `<textarea>` elements.
+- On touch devices, open the custom context menu after a 500 ms long-press gesture.
+
+### 18.2 Actions and Capabilities
+- **Formatting Actions:** Bold, Italic, Underline, Strike, Code, Highlight.
+- **Block Styles:** Heading 1, Heading 2, Heading 3, Bullet List, Ordered List, Blockquote.
+- **Alignment:** Align Left, Align Center, Align Right.
+- **Font Selection:** Classic Serif (Newsreader), Clean Sans (Inter).
+- **Insert & Clipboard:** Insert Link, Insert Image, Cut, Copy, Paste.
+
+### 18.3 Viewport Clamping & Keyboard Navigation
+- Clamp menu position within the visible viewport bounds. Prevent overflow past the right or bottom edges.
+- Close the menu on pressing `Escape`, clicking outside, or executing any menu action.
+- Navigate menu options using the `ArrowUp` and `ArrowDown` keys. Activate selected items with `Enter`.

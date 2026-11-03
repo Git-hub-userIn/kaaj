@@ -27,6 +27,7 @@ import { ImageBlockExtension } from './extensions/image-block.js';
 import { sanitizePastedHtml } from './paste-sanitizer.js';
 import { SelectionToolbar } from './SelectionToolbar.js';
 import { SlashMenu } from './SlashMenu.js';
+import { ContextMenu } from './ContextMenu.js';
 import {
   loadEntryDocument,
   saveEntryDocument,
@@ -91,6 +92,61 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashCoords, setSlashCoords] = useState<{ x: number; y: number } | null>(null);
   const [slashQuery, setSlashQuery] = useState('');
+
+  // Custom context menu state
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const [contextMenuCoords, setContextMenuCoords] = useState<{ x: number; y: number } | null>(null);
+  const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchCoordsRef = useRef<{ x: number; y: number } | null>(null);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    // 1. Shift + right-click must retain native browser menu
+    if (e.shiftKey) return;
+
+    // 2. Native form inputs and textareas must retain native browser menu
+    const target = e.target as HTMLElement | null;
+    if (target) {
+      const tagName = target.tagName.toLowerCase();
+      if (tagName === 'input' || tagName === 'textarea' || target.closest('input, textarea')) {
+        return;
+      }
+    }
+
+    // 3. Otherwise intercept right-click and show custom context menu
+    e.preventDefault();
+    setContextMenuCoords({ x: e.clientX, y: e.clientY });
+    setContextMenuOpen(true);
+  }, []);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName.toLowerCase() === 'input' || target.tagName.toLowerCase() === 'textarea' || target.closest('input, textarea'))) {
+      return;
+    }
+    const touch = e.touches[0];
+    if (!touch) return;
+    touchCoordsRef.current = { x: touch.clientX, y: touch.clientY };
+    touchTimerRef.current = setTimeout(() => {
+      if (touchCoordsRef.current) {
+        setContextMenuCoords(touchCoordsRef.current);
+        setContextMenuOpen(true);
+      }
+    }, 500);
+  }, []);
+
+  const handleTouchMove = useCallback(() => {
+    if (touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current);
+      touchTimerRef.current = null;
+    }
+  }, []);
+
+  const handleTouchEnd = useCallback(() => {
+    if (touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current);
+      touchTimerRef.current = null;
+    }
+  }, []);
 
   // Image upload and error state
   const [isUploading, setIsUploading] = useState(false);
@@ -968,6 +1024,10 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   return (
     <div
       data-testid="entry-editor-screen"
+      onContextMenu={handleContextMenu}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
       style={{
         minHeight: '100vh',
         backgroundColor: COLOR_TOKENS.paper,
@@ -1414,6 +1474,15 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
               onClose={() => setSlashMenuOpen(false)}
               coords={slashCoords}
               query={slashQuery}
+              onInsertImage={() => fileInputRef.current?.click()}
+            />
+          )}
+          {editor && (
+            <ContextMenu
+              editor={editor}
+              isOpen={contextMenuOpen}
+              onClose={() => setContextMenuOpen(false)}
+              coords={contextMenuCoords}
               onInsertImage={() => fileInputRef.current?.click()}
             />
           )}
