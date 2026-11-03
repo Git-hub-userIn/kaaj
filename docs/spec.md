@@ -557,6 +557,27 @@ kaaj/
 - Ensure all text and interactive borders meet WCAG 2.1 AA ratio (minimum 4.5:1 for body copy).
 - Maintain distinct luminance between paper backgrounds and ink typography.
 
+## 28. Progressive Web Application (PWA) Architecture (LOCKED)
+
+### 28.1 Web App Manifest
+- Expose `/manifest.webmanifest` linked in `index.html`.
+- Declare `name: "Kaaj"`, `short_name: "Kaaj"`, `display: "standalone"`, `start_url: "/"`.
+- Configure `theme_color: "#f6f4ee"` and `background_color: "#f6f4ee"`.
+- Supply multi-resolution icon definitions including `/favicon.svg`.
+
+### 28.2 Service Worker
+- Expose `/sw.js` from public directory.
+- Pre-cache core application shell (root document, app bundle, stylesheets, favicon).
+- Intercept fetch requests:
+  - Static app assets: Cache-First strategy with network fallback.
+  - API and WebSocket connections: Network-Only (or indexeddb sync layer).
+- Activate immediately via `self.skipWaiting()` and `clients.claim()`.
+
+### 28.3 Client Registration Seam
+- Register service worker within `apps/web/src/main.tsx` in production and test environments.
+- Expose registration hook and event listeners for service worker lifecycle.
+
+
 
 
 
