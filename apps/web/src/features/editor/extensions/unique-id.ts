@@ -10,7 +10,7 @@ export const UniqueIdExtension = Extension.create({
         types: ['paragraph', 'heading', 'bulletList', 'orderedList', 'blockquote', 'horizontalRule'],
         attributes: {
           id: {
-            default: () => `b_${crypto.randomUUID()}`,
+            default: null,
             parseHTML: (element) => element.getAttribute('data-block-id') || element.getAttribute('id'),
             renderHTML: (attributes) => {
               if (!attributes.id) return {};

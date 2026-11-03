@@ -20,7 +20,12 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
+        ws: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+      '/sync/ws': {
+        target: 'ws://localhost:3001',
+        ws: true,
       },
     },
   },

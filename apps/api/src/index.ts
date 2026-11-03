@@ -15,6 +15,8 @@ import {
 } from '@kaaj/doc-model';
 import { renderDocumentToPdf } from './services/pdf-service.js';
 import { CategoriesService } from './services/categories-service.js';
+import { WsSyncService } from './services/ws-sync-service.js';
+import { createBunWebSocket } from 'hono/bun';
 import { authGuard } from './auth/guard.js';
 import { BackupService } from './backup/backup-service.js';
 import { LocalFolderBackupTarget } from './backup/local-backup-target.js';
@@ -27,7 +29,7 @@ import {
   generateGoogleAuthUrl,
   exchangeCodeForTokens,
 } from './backup/google-drive-backup-target.js';
-import { checkPostgresReachable, closeDb, resolveDatabaseUrl } from './db/client.js';
+import { checkPostgresReachable, closeDb, resolveDatabaseUrl, ensureUser } from './db/client.js';
 
 const app = new Hono();
 
@@ -664,6 +666,90 @@ app.get('/auth/google/status', (c) => {
   });
 });
 
+// WebSocket Synchronisation (/sync/ws)
+const { upgradeWebSocket, websocket } = createBunWebSocket();
+const wsSyncService = new WsSyncService(categoriesService, maintenanceService);
+
+function resolveWsClientUser(c: any): string | null {
+  const token =
+    c.req.query('token') ||
+    c.req.header('Authorization')?.replace('Bearer ', '').trim() ||
+    c.req.header('sec-websocket-protocol') ||
+    c.req.header('x-user-id');
+
+  if (!token) return 'dev-owner-user';
+
+  const trimmed = token.trim();
+  if (trimmed.startsWith('user:')) {
+    return trimmed.slice(5).trim();
+  }
+  if (trimmed.startsWith('token-user-')) {
+    return trimmed.replace('token-', '').trim();
+  }
+  if (trimmed === 'kaaj-local-dev-token' || trimmed === 'dev-secret-token') {
+    return 'dev-owner-user';
+  }
+  return trimmed;
+}
+
+function parseRoom(c: any): { roomKey: string; roomUserId: string; entryId: string } | null {
+  const rawRoom = c.req.param('room') || c.req.query('room');
+  if (!rawRoom) return null;
+  const parts = rawRoom.split(':');
+  if (parts.length < 2) return null;
+  return {
+    roomKey: rawRoom,
+    roomUserId: parts[0],
+    entryId: parts.slice(1).join(':'),
+  };
+}
+
+const handleWsUpgrade = upgradeWebSocket(async (c) => {
+  const clientUser = resolveWsClientUser(c);
+  const parsedRoom = parseRoom(c);
+
+  if (!clientUser || !parsedRoom) {
+    return {
+      onOpen(_event, ws) {
+        ws.close(4400, 'Invalid room format or missing credentials');
+      },
+    };
+  }
+
+  // Cross-user room isolation check
+  if (parsedRoom.roomUserId !== clientUser) {
+    return {
+      onOpen(_event, ws) {
+        ws.close(4403, 'Forbidden: cross-user room access denied');
+      },
+    };
+  }
+
+  // Ensure user exists in database
+  await ensureUser(clientUser);
+
+  const room = await wsSyncService.getOrCreateRoom(parsedRoom.roomUserId, parsedRoom.entryId);
+
+  return {
+    onOpen(_event, ws) {
+      const socket = (ws as any).raw || ws;
+      wsSyncService.handleClientConnected(room, socket);
+    },
+    onMessage(event, ws) {
+      const socket = (ws as any).raw || ws;
+      const data = typeof event.data === 'string' ? Buffer.from(event.data) : event.data;
+      wsSyncService.handleClientMessage(room, socket, data as any);
+    },
+    onClose(_event, ws) {
+      const socket = (ws as any).raw || ws;
+      wsSyncService.handleClientDisconnected(room, socket);
+    },
+  };
+});
+
+app.get('/sync/ws', handleWsUpgrade);
+app.get('/sync/ws/:room', handleWsUpgrade);
+
 const PORT = Number(process.env.PORT || 3001);
 
 const isBun = typeof (globalThis as any).Bun !== 'undefined';
@@ -682,6 +768,7 @@ const gracefulShutdown = async () => {
   console.log('Shutting down Kaaj API gracefully...');
   maintenanceScheduler.stop();
   backupService.stopPeriodicTimer();
+  await wsSyncService.flushAllRooms();
   await closeDb();
   process.exit(0);
 };
@@ -692,4 +779,5 @@ process.on('SIGTERM', gracefulShutdown);
 export default {
   port: PORT,
   fetch: app.fetch,
+  websocket,
 };

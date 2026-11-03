@@ -49,8 +49,13 @@ import {
 } from './storage/draft-store.js';
 import { ensureFontLoaded } from './font-loader.js';
 import { GlobalBackupStatus } from '../backup/GlobalBackupStatus.js';
-import { API_BASE_URL, AUTH_TOKEN } from '../../config/api.js';
-import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud } from 'lucide-react';
+import { API_BASE_URL, AUTH_TOKEN, getAuthToken, getUserId, getWsUrl } from '../../config/api.js';
+import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff } from 'lucide-react';
+import * as Y from 'yjs';
+import { WebsocketProvider } from 'y-websocket';
+import { IndexeddbPersistence } from 'y-indexeddb';
+import Collaboration from '@tiptap/extension-collaboration';
+import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
 
 export interface EntryEditorScreenProps {
   entryId: string;
@@ -58,7 +63,7 @@ export interface EntryEditorScreenProps {
   onNavigateToCategory?: (categoryId: string) => void;
 }
 
-type SaveStatusState = 'saved' | 'saving' | 'error';
+type SaveStatusState = 'saved' | 'saving' | 'error' | 'syncing' | 'offline';
 
 export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   entryId,
@@ -223,11 +228,51 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
     return true;
   }, []);
 
+  // Collaborative Yjs document and WebSocket provider
+  const ydocRef = useRef<Y.Doc | null>(null);
+  const providerRef = useRef<WebsocketProvider | null>(null);
+  const indexeddbRef = useRef<IndexeddbPersistence | null>(null);
+
+  if (!ydocRef.current) {
+    const ydoc = new Y.Doc();
+    ydocRef.current = ydoc;
+
+    const currentUserId = getUserId();
+    const token = getAuthToken().replace('Bearer ', '').trim();
+    const wsUrl = getWsUrl();
+    const roomName = `${currentUserId}:${entryId}`;
+
+    const idb = new IndexeddbPersistence(roomName, ydoc);
+    indexeddbRef.current = idb;
+
+    const provider = new WebsocketProvider(wsUrl, roomName, ydoc, {
+      params: { token },
+      connect: true,
+    });
+    providerRef.current = provider;
+
+    provider.awareness.setLocalStateField('user', {
+      name: currentUserId,
+      color: '#ff3366',
+    });
+  }
+
   // Tiptap Editor instance
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
+        history: false,
+      }),
+      Collaboration.configure({
+        document: ydocRef.current!,
+      }),
+      CollaborationCursor.configure({
+        provider: providerRef.current!,
+        user: {
+          name: getUserId(),
+          color: '#ff3366',
+        },
       }),
       Underline,
       Link.configure({
@@ -330,10 +375,79 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         setSlashMenuOpen(false);
       }
 
+      // Update sync status indicator
+      if (providerRef.current?.wsconnected) {
+        setSaveStatus('syncing');
+        setSaveStatusText('Syncing...');
+      } else {
+        setSaveStatus('offline');
+        setSaveStatusText('Offline');
+      }
+
       // Trigger autosave timers
       triggerAutosaveTimers();
     },
   });
+
+  // Handle WebSocket connection status events
+  useEffect(() => {
+    const provider = providerRef.current;
+    if (!provider) return;
+
+    const onStatus = ({ status }: { status: string }) => {
+      if (status === 'connected') {
+        setSaveStatus('saved');
+        setSaveStatusText('Saved · just now');
+      } else if (status === 'connecting') {
+        setSaveStatus('syncing');
+        setSaveStatusText('Syncing...');
+      } else if (status === 'disconnected') {
+        setSaveStatus('offline');
+        setSaveStatusText('Offline');
+      }
+    };
+
+    const onOnline = () => {
+      setSaveStatus('saved');
+      setSaveStatusText('Saved · just now');
+    };
+    const onOffline = () => {
+      setSaveStatus('offline');
+      setSaveStatusText('Offline');
+    };
+
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+
+    provider.on('status', onStatus);
+    return () => {
+      provider.off('status', onStatus);
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, []);
+
+  // Cleanup Yjs provider and IndexedDB on permanent unmount (StrictMode safe)
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    if (providerRef.current && !providerRef.current.wsconnected) {
+      providerRef.current.connect();
+    }
+    return () => {
+      isMountedRef.current = false;
+      setTimeout(() => {
+        if (!isMountedRef.current) {
+          providerRef.current?.destroy();
+          indexeddbRef.current?.destroy();
+          ydocRef.current?.destroy();
+          providerRef.current = null;
+          indexeddbRef.current = null;
+          ydocRef.current = null;
+        }
+      }, 500);
+    };
+  }, [entryId]);
 
   // Image upload and validation handler
   const processImageUpload = useCallback(
@@ -584,6 +698,23 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
 
   // Autosave timers: 1.5s idle, at most 10s of changes
   const triggerAutosaveTimers = useCallback(() => {
+    // When collaborative WebSocket provider is configured, Yjs manages synchronization
+    if (providerRef.current) {
+      if (providerRef.current.wsconnected) {
+        setSaveStatus('syncing');
+        setSaveStatusText('Syncing...');
+        if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = setTimeout(() => {
+          setSaveStatus('saved');
+          setSaveStatusText('Saved · just now');
+        }, 1500);
+      } else {
+        setSaveStatus('offline');
+        setSaveStatusText('Offline');
+      }
+      return;
+    }
+
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => {
       performSave();
@@ -615,7 +746,38 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         lastSavedHashRef.current = computeDocHash(loaded.title, loaded.doc);
 
         if (editor) {
-          editor.commands.setContent(loaded.doc.doc as any);
+          const fragment = ydocRef.current?.getXmlFragment('default');
+          const hasContent = fragment && fragment.length > 0;
+          if (!hasContent) {
+            const p = providerRef.current;
+            if (!p || !p.synced) {
+              if (p && !p.wsconnected) {
+                editor.commands.setContent(loaded.doc.doc as any);
+              } else if (p) {
+                const onSynced = (isSynced: boolean) => {
+                  if (isSynced) {
+                    p.off('sync', onSynced);
+                    const frag = ydocRef.current?.getXmlFragment('default');
+                    if (!frag || frag.length === 0) {
+                      editor.commands.setContent(loaded.doc.doc as any);
+                    }
+                  }
+                };
+                p.on('sync', onSynced);
+                setTimeout(() => {
+                  p.off('sync', onSynced);
+                  const frag = ydocRef.current?.getXmlFragment('default');
+                  if (!frag || frag.length === 0) {
+                    editor.commands.setContent(loaded.doc.doc as any);
+                  }
+                }, 800);
+              } else {
+                editor.commands.setContent(loaded.doc.doc as any);
+              }
+            } else if (editor.isEmpty) {
+              editor.commands.setContent(loaded.doc.doc as any);
+            }
+          }
         }
 
         // Restore scroll position if previously saved
@@ -988,6 +1150,8 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
                 color:
                   saveStatus === 'error'
                     ? COLOR_TOKENS.terracottaDark
+                    : saveStatus === 'offline'
+                    ? '#b45309'
                     : COLOR_TOKENS.inkLight,
                 fontSize: '13px',
                 fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
@@ -996,10 +1160,13 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
                 textDecoration: saveStatus === 'error' ? 'underline' : 'none',
               }}
             >
-              {saveStatus === 'saving' && <RefreshCw size={12} className="spin" aria-hidden="true" />}
+              {(saveStatus === 'saving' || saveStatus === 'syncing') && (
+                <RefreshCw size={12} className="spin" aria-hidden="true" />
+              )}
               {saveStatus === 'saved' && <CheckCircle2 size={12} aria-hidden="true" />}
+              {saveStatus === 'offline' && <WifiOff size={12} aria-hidden="true" />}
               {saveStatus === 'error' && <AlertCircle size={12} aria-hidden="true" />}
-              <span>{saveStatusText}</span>
+              <span data-testid="save-status-text">{saveStatusText}</span>
             </button>
 
             {/* Global Backup Status & Actions */}

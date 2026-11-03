@@ -31,8 +31,14 @@ export class LocalFolderBackupTarget implements BackupTarget {
     const md5Checksum = crypto.createHash('md5').update(buffer).digest('hex');
 
     const tmpPath = `${fullPath}.tmp`;
+    await fs.mkdir(path.dirname(tmpPath), { recursive: true });
     await fs.writeFile(tmpPath, buffer);
-    await fs.rename(tmpPath, fullPath);
+    try {
+      await fs.rename(tmpPath, fullPath);
+    } catch {
+      await fs.copyFile(tmpPath, fullPath);
+      await fs.unlink(tmpPath).catch(() => {});
+    }
 
     return {
       path: cleanRel.replace(/\\/g, '/'),

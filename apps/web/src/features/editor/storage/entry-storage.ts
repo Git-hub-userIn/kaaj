@@ -7,7 +7,7 @@ import {
   type ChunkPayload,
   type TopLevelBlock,
 } from '@kaaj/doc-model';
-import { API_BASE_URL, AUTH_TOKEN } from '../../../config/api.js';
+import { API_BASE_URL, getAuthToken } from '../../../config/api.js';
 
 const API_BASE = API_BASE_URL;
 
@@ -40,7 +40,7 @@ export interface SaveResult {
 export async function loadEntryDocument(entryId: string): Promise<LoadedEntry> {
   const response = await fetch(`${API_BASE}/entries/${entryId}`, {
     headers: {
-      Authorization: AUTH_TOKEN,
+      Authorization: getAuthToken(),
       Accept: 'application/json',
     },
   });
@@ -92,7 +92,7 @@ export async function saveEntryDocument(
 ): Promise<SaveResult> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    Authorization: AUTH_TOKEN,
+    Authorization: getAuthToken(),
     'If-Match': `"${expectedVersion}"`,
   };
 
@@ -156,7 +156,7 @@ export async function saveEntryDocument(
 export async function loadEntryManifest(entryId: string): Promise<EntryManifest | null> {
   const response = await fetch(`${API_BASE}/entries/${entryId}/manifest`, {
     headers: {
-      Authorization: AUTH_TOKEN,
+      Authorization: getAuthToken(),
       Accept: 'application/json',
     },
   });
@@ -175,7 +175,7 @@ export async function loadEntryManifest(entryId: string): Promise<EntryManifest 
 export async function loadEntryChunk(entryId: string, chunkId: string): Promise<ChunkPayload | null> {
   const response = await fetch(`${API_BASE}/entries/${entryId}/chunks/${chunkId}`, {
     headers: {
-      Authorization: AUTH_TOKEN,
+      Authorization: getAuthToken(),
       Accept: 'application/json',
     },
   });
@@ -199,7 +199,7 @@ export async function saveEntryChunk(
 ): Promise<SaveResult & { manifest?: EntryManifest }> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    Authorization: AUTH_TOKEN,
+    Authorization: getAuthToken(),
     'If-Match': `"${expectedVersion}"`,
   };
 

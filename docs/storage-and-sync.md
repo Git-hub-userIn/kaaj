@@ -261,45 +261,55 @@ stateDiagram-v2
 
 ---
 
-## 6. Server-Sent Events (SSE) and Hot Writes
+## 6. WebSocket Synchronization and Yjs Rooms (/sync/ws)
 
-The backend coordinates live devices through Server-Sent Events (SSE) and HTTP hot writes.
+The backend synchronizes devices through bidirectional WebSockets (`/sync/ws`) and Yjs CRDT rooms.
+This architecture replaces the earlier Server-Sent Events (SSE) design.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor UserA as Device A (Editor)
-    participant Backend as Backend (Render API + SSE)
-    participant DB as PostgreSQL (Render)
-    actor UserB as Device B (Reader / Companion)
+    actor DeviceA as Device A (Editor)
+    participant WS as WebSocket Hub (/sync/ws)
+    participant Room as In-Memory Room (userId:entryId)
+    participant DB as PostgreSQL (Hot-Path Chunks)
+    actor DeviceB as Device B (Companion / Reader)
 
-    UserB->>Backend: GET /sync/stream?clientId=dev_B
-    Backend-->>UserB: HTTP 200 SSE Stream Connected
+    DeviceA->>WS: Connect /sync/ws?room=userA:entry1&token=...
+    WS->>WS: Authenticate token & verify user isolation
+    WS->>Room: Join room (load chunks to Y.Doc if fresh)
+    DeviceB->>WS: Connect /sync/ws?room=userA:entry1&token=...
+    WS->>Room: Join room
 
-    UserA->>Backend: POST /sync/yjs-update (Binary delta)
-    Backend->>DB: Update entry hot state & timestamp
-    Backend-->>UserA: 200 OK (Update acknowledged)
-    Backend-)UserB: SSE Event: "yjs_update" { entryId, delta }
+    DeviceA->>Room: Yjs update (binary delta)
+    Room->>DeviceB: Broadcast Yjs update & Awareness
+    DeviceB->>DeviceB: Merge Yjs CRDT into editor doc
 
-    UserB->>UserB: Yjs merges binary delta into local state
-    UserB->>UserB: Re-render affected blocks seamlessly
+    Room-->>DB: Debounced flush (1.5s): hotPathSaveChunkedEntry
+    Note over Room,DB: Updates chunks and manifest with fencing token
 ```
 
-### 6.1 SSE Protocol
+### 6.1 WebSocket Protocol & Security
+- **Endpoint:** `/sync/ws?room=<userId>:<entryId>&token=<token>` (or `Authorization: Bearer <token>`).
+- **Authentication on Connect:** Authenticate the client during the WebSocket handshake.
+- **Cross-User Room Isolation:** Rooms strictly enforce `<userId>:<entryId>`. Sockets attempting to join another user's room are immediately closed with status code `4403`.
+- **Presence & Awareness:** Yjs awareness updates broadcast cursor positions and device presence.
 
-- Endpoint: `GET /sync/stream`
-- Headers:
-  - `Content-Type: text/event-stream`
-  - `Cache-Control: no-cache`
-  - `Connection: keep-alive`
-- Heartbeat: server transmits `:ping` comment every 15 seconds.
-- Reconnection: client reconnects automatically with `Last-Event-ID` header.
+### 6.2 In-Memory Y.Doc & Debounced Persistence
+- The server maintains an in-memory `Y.Doc` for each active `userId:entryId` room.
+- On room initialization, populate the document from existing database chunks.
+- Incoming Yjs updates merge directly into the server `Y.Doc` and broadcast to peers.
+- A debounced timer (1.5s) writes document blocks to chunked storage using `hotPathSaveChunkedEntry` and lease fencing tokens.
+- When the final client disconnects, execute a synchronous final flush to database and prune the room from memory.
 
-### 6.2 Event Types
-
-1. `yjs_update`: transmits base64 Yjs update delta for active editing sessions.
-2. `chunk_saved`: informs other clients that a chunk was committed.
-3. `entry_meta_updated`: broadcasts title, spine weight, or color changes.
+### 6.3 Client Offline Persistence & Save Badges
+- **Offline Edits:** Changes made while disconnected save to browser IndexedDB and the local vault journal.
+- **Reconnect & Merge:** On reconnect with exponential backoff, Yjs CRDT automatically merges offline edits with server state.
+- **Per-Document Edit Locks Removed:** Yjs multi-writer CRDT eliminates pessimistic document edit locks.
+- **Save Status Badges:**
+  - `Saved`: All changes committed to the database.
+  - `Syncing`: Edits buffered, transmitting, or persisting to storage.
+  - `Offline`: Socket disconnected; changes safely stored locally.
 
 ---
 

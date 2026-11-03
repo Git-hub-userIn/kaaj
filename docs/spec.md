@@ -90,7 +90,7 @@ Read-only share links per entry (token-based). Ownership via the auth seam. Full
 | Images in Editor | Inline images via asset ID only. Paste, drop, button insert | LOCKED |
 | Storage Architecture | Local vault folder (notes + attachments) for fast lookup | LOCKED |
 | Cloud Storage | Google Drive holds bulk data and backups | LOCKED |
-| Hot Writes & Sync | Backend hot writes, SSE notifications to other devices | LOCKED |
+| Hot Writes & Sync | WebSocket (/sync/ws) Yjs room sync, awareness, and debounced flush | LOCKED |
 | Database | PostgreSQL on Render (metadata, spine weight, hot state) | LOCKED |
 | Sync States | State 0: local only, State 1: upload, State 2: editing | LOCKED |
 | Document Merging | Yjs CRDT performs merge operations | LOCKED |
@@ -111,7 +111,7 @@ Read-only share links per entry (token-based). Ownership via the auth seam. Full
 - **Rich text:** Tiptap core with MIT extensions. No paid or Pro extensions.
 - **Collaborative Sync & Merge:** Yjs CRDT for document state and chunk merge.
 - **Validation:** Zod schemas shared across web and api via `@kaaj/doc-model`.
-- **Backend:** Hono running on Node or Bun. Provides REST endpoints and SSE stream.
+- **Backend:** Hono running on Node or Bun. Provides REST endpoints and WebSocket `/sync/ws`.
 - **Database:** PostgreSQL on Render. Stores categories, entry metadata, spine styles, weights, and hot sync logs.
 - **Local Storage:** Local vault file system structure for instant lookup and offline access.
 - **Cloud Bulk Storage & Backup:** Google Drive API for full backups and media archives.
@@ -235,13 +235,13 @@ kaaj/
 
 - **State 0: Local only.** Changes exist only in the local vault or IndexedDB draft. Not yet sent to backend.
 - **State 1: Upload.** Changes sent to backend. Backend persists hot write to database and vault, and queues Drive backup.
-- **State 2: Editing.** Active editing session. Changes stream via Yjs updates. Backend broadcasts updates via Server-Sent Events (SSE).
+- **State 2: Editing.** Active editing session. Changes stream via Yjs updates over WebSocket `/sync/ws`.
 
 ### 8.3 Concurrency and Yjs merge (LOCKED)
 
 - Yjs CRDT handles document merges across devices and offline reconnection.
 - Edit-lock leases are removed. Multiple devices merge concurrent edits deterministically.
-- Backend acts as the central relay: receives Yjs update messages and broadcasts via SSE to active clients.
+- Backend acts as the central relay: manages in-memory `Y.Doc` rooms (`userId:entryId`) over `/sync/ws`, debouncing flushes to chunked storage.
 
 ### 8.4 Crash recovery (LOCKED)
 
