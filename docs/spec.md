@@ -463,3 +463,22 @@ kaaj/
 - Display outline hierarchy in a floating or docked sidebar panel.
 - Allow users to click any outline item to scroll immediately to the corresponding section.
 - Provide toggle button in the editor toolbar to open and close the outline sidebar.
+
+## 23. Tags and [[entry]] Backlinks (LOCKED)
+
+### 23.1 Tags Taxonomy
+- Organize entries with user-defined tags.
+- Tag names are normalized, case-insensitive identifiers.
+- Store tags per user with unique constraints on `(userId, name)`.
+- Link entries to tags with many-to-many associations in `EntryTag`.
+- Return tag listing with entry counts via `GET /tags`.
+- Filter entries by tag via `GET /entries?tag=:name`.
+- Add tags via `POST /entries/:id/tags` and delete tags via `DELETE /entries/:id/tags/:tagId`.
+
+### 23.2 [[entry]] Backlinks and Wikilinks
+- Support bidirectional linking between journal entries using `[[Title]]` or `[[entryId]]` syntax.
+- Auto-complete or type wikilinks inside entry content.
+- Query incoming backlinks via `GET /entries/:id/backlinks`.
+- Backlink queries return referring entries belonging to the authenticated user.
+- Enforce strict user isolation on all tag and backlink endpoints. Cross-user requests return 404 or 403.
+

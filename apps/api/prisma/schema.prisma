@@ -22,6 +22,8 @@ model User {
   maintenanceState MaintenanceState[]
   leases           JobLease[]
   revisions        EntryRevision[]
+  tags             Tag[]
+  entryTags        EntryTag[]
 }
 
 model Category {
@@ -69,6 +71,7 @@ model Entry {
   manifest      EntryManifest?
   chunks        Chunk[]
   revisions     EntryRevision[]
+  tags          EntryTag[]
 
   @@index([userId])
   @@index([categoryId])
@@ -181,3 +184,33 @@ model EntryRevision {
   @@index([userId])
   @@index([entryId])
 }
+
+model Tag {
+  id        String     @id @default(uuid())
+  userId    String     @default("dev-owner-user")
+  name      String
+  createdAt DateTime   @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entries   EntryTag[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model EntryTag {
+  userId    String   @default("dev-owner-user")
+  entryId   String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entry     Entry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([entryId, tagId])
+  @@index([userId])
+  @@index([entryId])
+  @@index([tagId])
+}
+

@@ -159,3 +159,18 @@ Raw SQL statements in `apps/api/src/db/hot-paths.ts` require an explicit `userId
    - Foreign key constraints on `Entry.id` declare `ON DELETE CASCADE` for `Chunk`, `EntryManifest`, and `EntryRevision`.
    - Deleting the `Entry` row permanently purges all associated chunks and revisions in a single transaction.
 5. **Scoped Purge**: All purge queries strictly filter by `userId` to enforce isolation.
+
+---
+
+## 10. Tags and Backlinks Architecture
+
+### 10.1 Schema Models
+1. **Tag**: `id` (PK, string), `userId` (FK -> User.id, indexed), `name` (string), `createdAt` (DateTime). Unique compound index on `(userId, name)`.
+2. **EntryTag**: `userId` (FK -> User.id, indexed), `entryId` (FK -> Entry.id, indexed), `tagId` (FK -> Tag.id, indexed), `createdAt` (DateTime). Composite PK on `(entryId, tagId)`.
+
+### 10.2 Wikilink Resolution
+- Wikilinks use the format `[[entry-title]]` or `[[entryId]]`.
+- Backlinks are resolved dynamically across stored entry chunk payloads filtered strictly by `userId`.
+- Dynamic matching eliminates desynchronization between text chunks and separate link indices.
+- Cascade deletion automatically cleans up associated `EntryTag` links when entries or tags are deleted.
+

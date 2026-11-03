@@ -40,6 +40,8 @@ const USER_OWNED_MODELS = new Set([
   'AssetMeta',
   'MaintenanceState',
   'JobLease',
+  'Tag',
+  'EntryTag',
 ]);
 
 export function resolveDatabaseUrl(overrideUrl?: string): string {

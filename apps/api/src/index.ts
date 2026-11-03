@@ -138,12 +138,13 @@ app.get('/categories/:id/stats', async (c) => {
 
 app.get('/categories/:id/entries', async (c) => {
   const id = c.req.param('id');
+  const tag = c.req.query('tag');
   const catSvc = categoriesService.forUser(getUserId(c));
   const cat = await catSvc.getCategory(id);
   if (!cat) {
     return c.json({ error: 'Category not found' }, 404);
   }
-  const entries = await catSvc.listEntriesForCategory(id);
+  const entries = await catSvc.listEntriesForCategory(id, undefined, tag);
   return c.json(entries);
 });
 
@@ -341,7 +342,12 @@ app.put('/entries/:id', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400);
   }
 
-  const rawDoc = body.doc !== undefined ? body.doc : body;
+  const rawDoc =
+    body.schemaVersion !== undefined
+      ? body
+      : body.doc !== undefined
+      ? body.doc
+      : body;
 
   const parseResult = DocumentEnvelopeSchema.safeParse(rawDoc);
   if (!parseResult.success) {
@@ -487,6 +493,70 @@ app.post('/entries/:id/revisions/:version/restore', async (c) => {
     return c.json({ error: 'Failed to restore revision: entry or revision not found' }, 404);
   }
   return c.json(result);
+});
+
+// Tags & Backlinks Endpoints (User-Scoped)
+app.get('/tags', async (c) => {
+  const userId = getUserId(c);
+  const tags = await categoriesService.forUser(userId).listTags();
+  return c.json(tags);
+});
+
+app.get('/tags/:name/entries', async (c) => {
+  const userId = getUserId(c);
+  const name = c.req.param('name');
+  const entries = await categoriesService.forUser(userId).listEntriesByTag(name);
+  return c.json(entries);
+});
+
+app.get('/entries/:id/tags', async (c) => {
+  const id = c.req.param('id');
+  const userId = getUserId(c);
+  const tags = await categoriesService.forUser(userId).getEntryTags(id);
+  if (!tags) {
+    return c.json({ error: 'Entry not found' }, 404);
+  }
+  return c.json(tags);
+});
+
+app.post('/entries/:id/tags', async (c) => {
+  const id = c.req.param('id');
+  const userId = getUserId(c);
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+  if (!body.name || typeof body.name !== 'string') {
+    return c.json({ error: 'Tag name is required' }, 400);
+  }
+  const tag = await categoriesService.forUser(userId).addEntryTag(id, body.name);
+  if (!tag) {
+    return c.json({ error: 'Entry not found or invalid tag' }, 404);
+  }
+  return c.json(tag, 201);
+});
+
+app.delete('/entries/:id/tags/:tagId', async (c) => {
+  const id = c.req.param('id');
+  const tagId = c.req.param('tagId');
+  const userId = getUserId(c);
+  const ok = await categoriesService.forUser(userId).removeEntryTag(id, tagId);
+  if (!ok) {
+    return c.json({ error: 'Entry not found' }, 404);
+  }
+  return c.json({ success: true });
+});
+
+app.get('/entries/:id/backlinks', async (c) => {
+  const id = c.req.param('id');
+  const userId = getUserId(c);
+  const backlinks = await categoriesService.forUser(userId).getBacklinks(id);
+  if (!backlinks) {
+    return c.json({ error: 'Entry not found' }, 404);
+  }
+  return c.json(backlinks);
 });
 
 app.post('/migrate', async (c) => {

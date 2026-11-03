@@ -337,10 +337,20 @@ export class CategoriesService {
     };
   }
 
-  async listEntriesForCategory(categoryId: string, _subject?: string): Promise<EntryLightRow[]> {
+  async listEntriesForCategory(categoryId: string, _subject?: string, tag?: string): Promise<EntryLightRow[]> {
     await this.init();
+    const where: any = { categoryId, deletedAt: null };
+    if (tag) {
+      where.tags = {
+        some: {
+          tag: {
+            name: tag.toLowerCase().trim().replace(/^#/, ''),
+          },
+        },
+      };
+    }
     const entries = await this.prisma.entry.findMany({
-      where: { categoryId, deletedAt: null },
+      where,
       orderBy: [{ pinned: 'desc' }, { sortOrder: 'asc' }],
       take: 500,
     });
@@ -889,5 +899,168 @@ export class CategoriesService {
       revision.title
     );
     return restored;
+  }
+
+  async listTags(): Promise<{ id: string; name: string; count: number }[]> {
+    await this.init();
+    const tags = await this.prisma.tag.findMany({
+      where: { userId: this.userId },
+      orderBy: { name: 'asc' },
+      include: {
+        entries: {
+          where: {
+            entry: {
+              deletedAt: null,
+            },
+          },
+          select: { entryId: true },
+        },
+      },
+    });
+    return tags.map((t) => ({ id: t.id, name: t.name, count: t.entries.length }));
+  }
+
+  async getEntryTags(entryId: string): Promise<{ id: string; name: string }[] | null> {
+    await this.init();
+    const entry = await this.prisma.entry.findFirst({
+      where: { id: entryId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!entry) return null;
+
+    const entryTags = await this.prisma.entryTag.findMany({
+      where: { entryId },
+      include: { tag: true },
+      orderBy: { tag: { name: 'asc' } },
+    });
+    return entryTags.map((et) => ({ id: et.tag.id, name: et.tag.name }));
+  }
+
+  async addEntryTag(entryId: string, rawTagName: string): Promise<{ id: string; name: string } | null> {
+    await this.init();
+    const entry = await this.prisma.entry.findFirst({
+      where: { id: entryId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!entry) return null;
+
+    const name = rawTagName.toLowerCase().trim().replace(/^#/, '');
+    if (!name) return null;
+
+    const tag = await this.prisma.tag.upsert({
+      where: {
+        userId_name: {
+          userId: this.userId,
+          name,
+        },
+      },
+      create: {
+        userId: this.userId,
+        name,
+      },
+      update: {},
+    });
+
+    await this.prisma.entryTag.upsert({
+      where: {
+        entryId_tagId: {
+          entryId,
+          tagId: tag.id,
+        },
+      },
+      create: {
+        userId: this.userId,
+        entryId,
+        tagId: tag.id,
+      },
+      update: {},
+    });
+
+    return { id: tag.id, name: tag.name };
+  }
+
+  async removeEntryTag(entryId: string, tagId: string): Promise<boolean> {
+    await this.init();
+    const entry = await this.prisma.entry.findFirst({
+      where: { id: entryId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!entry) return false;
+
+    await this.prisma.entryTag.deleteMany({
+      where: {
+        entryId,
+        tagId,
+        userId: this.userId,
+      },
+    });
+    return true;
+  }
+
+  async listEntriesByTag(tagName: string): Promise<EntryLightRow[]> {
+    await this.init();
+    const entries = await this.prisma.entry.findMany({
+      where: {
+        deletedAt: null,
+        tags: {
+          some: {
+            tag: {
+              name: tagName.toLowerCase().trim().replace(/^#/, ''),
+            },
+          },
+        },
+      },
+      orderBy: [{ pinned: 'desc' }, { updatedAt: 'desc' }],
+      take: 500,
+    });
+    return entries.map((e) => ({
+      id: e.id,
+      categoryId: e.categoryId,
+      title: e.title,
+      weight: e.weight,
+      sortOrder: e.sortOrder,
+      color: e.color ?? null,
+      pinned: e.pinned,
+      spine: (e.spine as any as SpineStyle) ?? null,
+      stats: (e.stats as any as EntryStats) ?? { words: 0, images: 0 },
+      createdAt: e.createdAt.toISOString(),
+      updatedAt: e.updatedAt.toISOString(),
+      lastOpenedAt: e.lastOpenedAt ? e.lastOpenedAt.toISOString() : null,
+      deletedAt: null,
+    }));
+  }
+
+  async getBacklinks(entryId: string): Promise<{ id: string; title: string; categoryId: string; updatedAt: string }[] | null> {
+    await this.init();
+    const target = await this.prisma.entry.findFirst({
+      where: { id: entryId, deletedAt: null },
+      select: { id: true, title: true },
+    });
+    if (!target) return null;
+
+    const titlePattern = `%[[${target.title}]]%`;
+    const idPattern = `%[[${target.id}]]%`;
+
+    const rows: any[] = await this.prisma.$queryRaw`
+      SELECT DISTINCT e.id, e.title, e."categoryId", e."updatedAt"
+      FROM "Entry" e
+      JOIN "Chunk" c ON c."entryId" = e.id
+      WHERE e."userId" = ${this.userId}
+        AND e."deletedAt" IS NULL
+        AND e.id != ${entryId}
+        AND (
+          c.payload::text ILIKE ${titlePattern}
+          OR c.payload::text ILIKE ${idPattern}
+        )
+      ORDER BY e."updatedAt" DESC
+      LIMIT 100
+    `;
+
+    return rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      categoryId: r.categoryId,
+      updatedAt: new Date(r.updatedAt).toISOString(),
+    }));
   }
 }

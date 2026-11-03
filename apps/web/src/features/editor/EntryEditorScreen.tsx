@@ -50,10 +50,11 @@ import {
 } from './storage/draft-store.js';
 import { ensureFontLoaded } from './font-loader.js';
 import { GlobalBackupStatus } from '../backup/GlobalBackupStatus.js';
-import { API_BASE_URL, AUTH_TOKEN, getAuthToken, getUserId, getWsUrl } from '../../config/api.js';
-import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff, History, ListTree } from 'lucide-react';
+import { API_BASE_URL, AUTH_TOKEN, getAuthToken, getUserId, getWsUrl, getAuthHeaders } from '../../config/api.js';
+import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff, History, ListTree, Link2, Tag } from 'lucide-react';
 import { RevisionHistoryDrawer } from './RevisionHistoryDrawer.js';
 import { OutlineSidebar } from './OutlineSidebar.js';
+import { BacklinksDrawer } from './BacklinksDrawer.js';
 import { CalloutExtension } from './extensions/callout.js';
 import { Table } from '@tiptap/extension-table';
 import { TableRow } from '@tiptap/extension-table-row';
@@ -107,6 +108,10 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   const [contextMenuCoords, setContextMenuCoords] = useState<{ x: number; y: number } | null>(null);
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
+  const [backlinksOpen, setBacklinksOpen] = useState(false);
+  const [tags, setTags] = useState<{ id: string; name: string }[]>([]);
+  const [newTagInput, setNewTagInput] = useState('');
+  const [tagInputVisible, setTagInputVisible] = useState(false);
   const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchCoordsRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -144,6 +149,67 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       }
     }, 500);
   }, []);
+
+  useEffect(() => {
+    if (!entryId) return;
+    let cancelled = false;
+    fetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/tags`, {
+      headers: getAuthHeaders(),
+    })
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (!cancelled && Array.isArray(data)) {
+          setTags(data);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [entryId]);
+
+  const handleAddTag = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const name = newTagInput.trim().toLowerCase().replace(/^#/, '');
+    if (!name) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/tags`, {
+        method: 'POST',
+        headers: {
+          ...getAuthHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name }),
+      });
+      if (res.ok) {
+        const created = await res.json();
+        if (!tags.some((t) => t.id === created.id)) {
+          setTags([...tags, created]);
+        }
+        setNewTagInput('');
+        setTagInputVisible(false);
+      }
+    } catch (err) {
+      console.error('Failed to add tag:', err);
+    }
+  };
+
+  const handleRemoveTag = async (tagId: string) => {
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/tags/${encodeURIComponent(tagId)}`,
+        {
+          method: 'DELETE',
+          headers: getAuthHeaders(),
+        }
+      );
+      if (res.ok) {
+        setTags(tags.filter((t) => t.id !== tagId));
+      }
+    } catch (err) {
+      console.error('Failed to remove tag:', err);
+    }
+  };
 
   const handleTouchMove = useCallback(() => {
     if (touchTimerRef.current) {
@@ -1336,6 +1402,31 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
               <span>History</span>
             </button>
 
+            {/* Backlinks Button */}
+            <button
+              type="button"
+              data-testid="toolbar-backlinks-btn"
+              onClick={() => setBacklinksOpen(!backlinksOpen)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                backgroundColor: backlinksOpen ? COLOR_TOKENS.paperDark : 'transparent',
+                border: `1px solid ${COLOR_TOKENS.paperDark}`,
+                borderRadius: RADIUS_TOKENS.sm,
+                cursor: 'pointer',
+                color: backlinksOpen ? COLOR_TOKENS.ink : COLOR_TOKENS.inkMuted,
+                fontSize: '13px',
+                padding: '4px 8px',
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                transition: 'all 0.15s ease',
+              }}
+              title="View backlinks and mentions"
+            >
+              <Link2 size={13} aria-hidden="true" />
+              <span>Backlinks</span>
+            </button>
+
             {/* Quiet Save Status */}
             <button
               type="button"
@@ -1591,13 +1682,124 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
             border: 'none',
             outline: 'none',
             width: '100%',
-            marginBottom: '32px',
+            marginBottom: '16px',
             padding: 0,
             resize: 'none',
             overflow: 'hidden',
             wordBreak: 'break-word',
           }}
         />
+
+        {/* Entry Tags Bar */}
+        <div
+          data-testid="entry-tags-bar"
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: '6px',
+            marginBottom: '24px',
+          }}
+        >
+          {tags.map((tag) => (
+            <span
+              key={tag.id}
+              data-testid="tag-badge"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontSize: '11px',
+                padding: '2px 8px',
+                borderRadius: '12px',
+                backgroundColor: COLOR_TOKENS.paperDark,
+                color: COLOR_TOKENS.ink,
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+              }}
+            >
+              #{tag.name}
+              <button
+                data-testid="remove-tag-btn"
+                onClick={() => handleRemoveTag(tag.id)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '0 2px',
+                  fontSize: '12px',
+                  color: COLOR_TOKENS.inkMuted,
+                  lineHeight: 1,
+                }}
+                title={`Remove tag ${tag.name}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          {tagInputVisible ? (
+            <form
+              onSubmit={handleAddTag}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+            >
+              <input
+                data-testid="add-tag-input"
+                type="text"
+                value={newTagInput}
+                onChange={(e) => setNewTagInput(e.target.value)}
+                placeholder="tag name..."
+                autoFocus
+                onBlur={() => {
+                  if (!newTagInput.trim()) setTagInputVisible(false);
+                }}
+                style={{
+                  fontSize: '11px',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  border: `1px solid ${COLOR_TOKENS.paperDark}`,
+                  outline: 'none',
+                  width: '90px',
+                  backgroundColor: COLOR_TOKENS.paper,
+                  color: COLOR_TOKENS.ink,
+                }}
+              />
+              <button
+                data-testid="save-tag-btn"
+                type="submit"
+                style={{
+                  fontSize: '11px',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  background: COLOR_TOKENS.terracotta,
+                  color: '#fff',
+                  border: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                Add
+              </button>
+            </form>
+          ) : (
+            <button
+              data-testid="add-tag-btn"
+              onClick={() => setTagInputVisible(true)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontSize: '11px',
+                padding: '2px 8px',
+                borderRadius: '12px',
+                border: `1px dashed ${COLOR_TOKENS.paperDark}`,
+                background: 'transparent',
+                color: COLOR_TOKENS.inkMuted,
+                cursor: 'pointer',
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+              }}
+            >
+              + Tag
+            </button>
+          )}
+        </div>
 
         {/* Body Editor Container */}
         <main
@@ -1679,6 +1881,12 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         isOpen={historyDrawerOpen}
         onClose={() => setHistoryDrawerOpen(false)}
         onRestored={reloadEntry}
+      />
+
+      <BacklinksDrawer
+        entryId={entryId}
+        isOpen={backlinksOpen}
+        onClose={() => setBacklinksOpen(false)}
       />
     </div>
   );

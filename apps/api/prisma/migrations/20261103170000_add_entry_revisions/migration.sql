@@ -1,5 +1,5 @@
 -- DropIndex
-DROP INDEX "Chunk_entryId_order_key";
+DROP INDEX IF EXISTS "Chunk_entryId_order_key";
 
 -- AlterTable
 ALTER TABLE "User" ALTER COLUMN "updatedAt" DROP DEFAULT;
