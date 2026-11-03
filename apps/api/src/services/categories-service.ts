@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type {
@@ -32,6 +33,9 @@ import {
   hotPathSaveChunkedEntry,
   hotPathVersionCheckedUpdateEntry,
   hotPathSearchEntries,
+  hotPathGetBacklinks,
+  hotPathGetEntriesOnThisDay,
+  hotPathCheckAssetReferenced,
   ConcurrencyConflictError,
 } from '../db/hot-paths.js';
 
@@ -817,12 +821,52 @@ export class CategoriesService {
     }));
   }
 
+  private async cleanupOrphanedEntryAssets(entryId: string): Promise<void> {
+    try {
+      const chunks = await this.prisma.chunk.findMany({
+        where: { entryId },
+      });
+
+      const assetIds = new Set<string>();
+      for (const ch of chunks) {
+        const payloadStr = JSON.stringify(ch.payload || '');
+        const matches = payloadStr.match(/asset_[a-zA-Z0-9_-]+/g);
+        if (matches) {
+          for (const m of matches) assetIds.add(m);
+        }
+      }
+
+      const userStore = this.assetStore.forUser(this.userId);
+      for (const assetId of assetIds) {
+        const stillReferenced = await hotPathCheckAssetReferenced(this.prisma, {
+          userId: this.userId,
+          excludeEntryId: entryId,
+          assetId,
+        });
+
+        if (!stillReferenced) {
+          const record = await userStore.getRecord(assetId);
+          if (record) {
+            await userStore.delete(record.storageKey);
+          }
+        }
+      }
+
+      const entryVaultDir = path.join(this.baseDataDir, 'vault', this.userId, 'entries', entryId);
+      await fs.rm(entryVaultDir, { recursive: true, force: true }).catch(() => {});
+    } catch (err) {
+      console.warn('Failed to cleanup orphaned assets for entry:', entryId, err);
+    }
+  }
+
   async purgeEntry(id: string): Promise<boolean> {
     await this.init();
     const entry = await this.prisma.entry.findFirst({
       where: { id, deletedAt: { not: null } },
     });
     if (!entry) return false;
+
+    await this.cleanupOrphanedEntryAssets(id);
 
     await this.prisma.entry.delete({
       where: { id },
@@ -836,6 +880,15 @@ export class CategoriesService {
     const whereClause = purgeAll
       ? { deletedAt: { not: null } }
       : { deletedAt: { lte: cutoff } };
+
+    const toPurge = await this.prisma.entry.findMany({
+      where: whereClause,
+      select: { id: true },
+    });
+
+    for (const e of toPurge) {
+      await this.cleanupOrphanedEntryAssets(e.id);
+    }
 
     const res = await this.prisma.entry.deleteMany({
       where: whereClause,
@@ -1041,20 +1094,13 @@ export class CategoriesService {
     const titlePattern = `%[[${target.title}]]%`;
     const idPattern = `%[[${target.id}]]%`;
 
-    const rows: any[] = await this.prisma.$queryRaw`
-      SELECT DISTINCT e.id, e.title, e."categoryId", e."updatedAt"
-      FROM "Entry" e
-      JOIN "Chunk" c ON c."entryId" = e.id
-      WHERE e."userId" = ${this.userId}
-        AND e."deletedAt" IS NULL
-        AND e.id != ${entryId}
-        AND (
-          c.payload::text ILIKE ${titlePattern}
-          OR c.payload::text ILIKE ${idPattern}
-        )
-      ORDER BY e."updatedAt" DESC
-      LIMIT 100
-    `;
+    const rows = await hotPathGetBacklinks(this.prisma, {
+      userId: this.userId,
+      targetEntryId: entryId,
+      titlePattern,
+      idPattern,
+      limit: 100,
+    });
 
     return rows.map((r) => ({
       id: r.id,
@@ -1177,6 +1223,38 @@ export class CategoriesService {
     };
   }
 
+  static async getSharedEntryAsset(token: string, assetId: string): Promise<{ userId: string; entryId: string } | null> {
+    const link = await findShareLinkByToken(token);
+    if (!link) return null;
+    if (link.revokedAt !== null) return null;
+    if (link.expiresAt && link.expiresAt < new Date()) return null;
+    if (!link.entry || link.entry.deletedAt !== null) return null;
+
+    const userClient = forUser(link.userId);
+    const chunks = await userClient.chunk.findMany({
+      where: { entryId: link.entryId },
+    });
+
+    // Check if the requested assetId is actually referenced in this shared entry
+    let referenced = false;
+    for (const ch of chunks) {
+      const payloadStr = JSON.stringify(ch.payload || '');
+      if (payloadStr.includes(assetId)) {
+        referenced = true;
+        break;
+      }
+    }
+
+    if (!referenced) {
+      return null;
+    }
+
+    return {
+      userId: link.userId,
+      entryId: link.entryId,
+    };
+  }
+
   async getEntriesOnThisDay(
     referenceDate?: Date
   ): Promise<{ id: string; title: string; categoryId: string; createdAt: string; updatedAt: string }[]> {
@@ -1185,16 +1263,12 @@ export class CategoriesService {
     const month = target.getMonth() + 1;
     const day = target.getDate();
 
-    const rows: any[] = await this.prisma.$queryRaw`
-      SELECT id, title, "categoryId", "createdAt", "updatedAt"
-      FROM "Entry"
-      WHERE "userId" = ${this.userId}
-        AND "deletedAt" IS NULL
-        AND EXTRACT(MONTH FROM "createdAt") = ${month}
-        AND EXTRACT(DAY FROM "createdAt") = ${day}
-      ORDER BY "createdAt" DESC
-      LIMIT 50
-    `;
+    const rows = await hotPathGetEntriesOnThisDay(this.prisma, {
+      userId: this.userId,
+      month,
+      day,
+      limit: 50,
+    });
 
     return rows.map((r) => ({
       id: r.id,

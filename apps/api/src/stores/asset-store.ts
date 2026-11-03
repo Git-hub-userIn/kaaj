@@ -196,6 +196,9 @@ export class LocalDiskAssetStore {
       delete: async (storageKey: string): Promise<void> => {
         const filePath = path.join(userVaultDir, storageKey);
         await fs.unlink(filePath).catch(() => {});
+        const assetId = path.basename(storageKey, path.extname(storageKey));
+        await fs.unlink(path.join(userThumbsDir, `${assetId}_320.webp`)).catch(() => {});
+        await fs.unlink(path.join(userThumbsDir, `${assetId}_960.webp`)).catch(() => {});
         await prisma.assetMeta.deleteMany({
           where: { storageKey, userId },
         }).catch(() => {});

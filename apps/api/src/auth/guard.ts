@@ -30,26 +30,24 @@ export function checkRateLimit(
 }
 
 export async function authGuard(c: Context, next: Next): Promise<Response | void> {
-  // Public routes that bypass user authentication
-  if (c.req.path.startsWith('/shared/')) {
+  // Routes handled independently (public shares, WebSocket auth handler)
+  if (c.req.path.startsWith('/shared/') || c.req.path.startsWith('/sync/ws')) {
     return await next();
   }
 
   const isProduction = process.env.NODE_ENV === 'production';
   const authHeader = c.req.header('Authorization');
-  const xUserId = c.req.header('x-user-id');
+  const queryToken = c.req.query('token');
+  const token = (authHeader ? authHeader.replace(/^Bearer\s+/i, '') : queryToken)?.trim();
 
   let resolvedUserId: string | null = null;
 
-  if (!isProduction) {
-    const token = authHeader?.replace('Bearer ', '').trim();
-    if (token && token.startsWith('user:')) {
+  if (!isProduction && token) {
+    if (token.startsWith('user:')) {
       resolvedUserId = token.slice(5).trim();
-    } else if (token && token.startsWith('token-user-')) {
+    } else if (token.startsWith('token-user-')) {
       resolvedUserId = token.replace('token-', '').trim();
-    } else if (xUserId) {
-      resolvedUserId = xUserId.trim();
-    } else if (!token || token === DEV_TOKEN || token === 'kaaj-local-dev-token' || token === 'dev-secret-token') {
+    } else if (token === DEV_TOKEN || token === 'kaaj-local-dev-token' || token === 'dev-secret-token') {
       resolvedUserId = 'dev-owner-user';
     }
   }

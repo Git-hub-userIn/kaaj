@@ -367,156 +367,39 @@ export class ImportExportService {
     entriesImported: number;
     assetsImported: number;
   }> {
+    const MAX_ZIP_BYTES = 50 * 1024 * 1024; // 50 MB
+    if (zipBuffer.length > MAX_ZIP_BYTES) {
+      const err: any = new Error('Archive exceeds maximum allowed size of 50 MB.');
+      err.statusCode = 413;
+      throw err;
+    }
+
     const zip = await JSZip.loadAsync(zipBuffer);
+
+    // Zip-slip protection: reject any path containing traversal patterns or absolute targets
+    for (const relativePath of Object.keys(zip.files)) {
+      const normalized = path.normalize(relativePath).replace(/\\/g, '/');
+      if (
+        normalized.startsWith('../') ||
+        normalized.includes('/../') ||
+        normalized.startsWith('/') ||
+        path.isAbsolute(relativePath)
+      ) {
+        const err: any = new Error(`Malicious zip entry detected: ${relativePath}`);
+        err.statusCode = 400;
+        throw err;
+      }
+    }
 
     let categoriesImported = 0;
     let entriesImported = 0;
     let assetsImported = 0;
 
+    const assetIdMap = new Map<string, string>();
     const categoryIdMap = new Map<string, string>();
+    const entryIdMap = new Map<string, string>();
 
-    // 1. Categories
-    const catFile = zip.file('categories.json');
-    if (catFile) {
-      const catRaw = await catFile.async('string');
-      const cats = JSON.parse(catRaw);
-      for (const cat of cats) {
-        const createdCat = await this.prisma.category.create({
-          data: {
-            userId: this.userId,
-            title: cat.title,
-            description: cat.description,
-            color: cat.color,
-            sortOrder: cat.sortOrder || 0,
-            coverAssetId: cat.coverAssetId,
-          },
-        });
-        categoryIdMap.set(cat.id, createdCat.id);
-        categoriesImported++;
-      }
-    }
-
-    // 2. Entries
-    const entriesFolder = zip.folder('entries');
-    if (entriesFolder) {
-      const files: any[] = [];
-      entriesFolder.forEach((relativePath, file) => {
-        if (!file.dir && relativePath.endsWith('.json')) {
-          files.push(file);
-        }
-      });
-
-      for (const file of files) {
-        const raw = await file.async('string');
-        const data = JSON.parse(raw);
-        const { entry, doc, tags } = data;
-
-        const newEntryId = `entry_${crypto.randomUUID()}`;
-        let targetCategoryId = categoryIdMap.get(entry.categoryId);
-        if (!targetCategoryId) {
-          const fallbackCat = await this.prisma.category.findFirst({
-            where: { deletedAt: null },
-          });
-          if (fallbackCat) {
-            targetCategoryId = fallbackCat.id;
-          } else {
-            const newCat = await this.prisma.category.create({
-              data: {
-                userId: this.userId,
-                title: 'Imported Archive',
-                color: '#6366f1',
-              },
-            });
-            targetCategoryId = newCat.id;
-          }
-        }
-
-        const blocks = (doc?.content || []) as TopLevelBlock[];
-        const { manifest, chunks } = splitBlocksIntoChunks(blocks, {
-          existingChunks: [],
-          entryId: newEntryId,
-          version: 1,
-        });
-
-        // Create Entry
-        await this.prisma.entry.create({
-          data: {
-            id: newEntryId,
-            userId: this.userId,
-            categoryId: targetCategoryId,
-            title: entry.title || 'Imported Entry',
-            color: entry.color,
-            pinned: entry.pinned || false,
-            sortOrder: entry.sortOrder || 0,
-            version: 1,
-          },
-        });
-
-        // Write Chunks
-        for (let idx = 0; idx < chunks.length; idx++) {
-          const chunk = chunks[idx];
-          const meta = manifest.chunks[idx];
-          await this.prisma.chunk.create({
-            data: {
-              id: chunk.chunkId,
-              entryId: newEntryId,
-              userId: this.userId,
-              order: meta ? meta.order : idx,
-              checksum: meta ? meta.checksum : '',
-              bytes: meta ? meta.bytes : 0,
-              blockCount: meta ? meta.blockCount : chunk.blocks.length,
-              payload: chunk.blocks as any,
-              version: 1,
-            },
-          });
-        }
-
-        // Write Manifest
-        await this.prisma.entryManifest.create({
-          data: {
-            userId: this.userId,
-            entryId: newEntryId,
-            version: manifest.version,
-            totalBlocks: manifest.totalBlocks,
-            chunkCount: manifest.chunkCount,
-            chunks: manifest.chunks as any,
-            stats: manifest.stats as any,
-          },
-        });
-
-        // Tags
-        if (Array.isArray(tags)) {
-          for (const tagName of tags) {
-            const cleanName = tagName.trim().toLowerCase().replace(/^#/, '');
-            if (!cleanName) continue;
-            const tag = await this.prisma.tag.upsert({
-              where: {
-                userId_name: {
-                  userId: this.userId,
-                  name: cleanName,
-                },
-              },
-              create: {
-                userId: this.userId,
-                name: cleanName,
-              },
-              update: {},
-            });
-            await this.prisma.entryTag.create({
-              data: {
-                userId: this.userId,
-                entryId: newEntryId,
-                tagId: tag.id,
-              },
-            });
-          }
-        }
-
-        entriesImported++;
-      }
-    }
-
-    // 3. Attachments
+    // 1. Import Attachments first to build assetIdMap
     const attachmentsFolder = zip.folder('attachments');
     if (attachmentsFolder) {
       const files: any[] = [];
@@ -526,16 +409,188 @@ export class ImportExportService {
 
       for (const item of files) {
         const buffer = await item.file.async('nodebuffer');
-        const assetId = path.basename(item.path, path.extname(item.path));
+        const oldAssetId = path.basename(item.path, path.extname(item.path));
         const mime = item.path.endsWith('.png')
           ? 'image/png'
           : item.path.endsWith('.webp')
           ? 'image/webp'
           : 'image/jpeg';
 
-        await this.assetStore.put(buffer, mime, item.path);
+        const { asset: newAsset } = await this.assetStore.put(buffer, mime, item.path);
+        assetIdMap.set(oldAssetId, newAsset.id);
         assetsImported++;
       }
+    }
+
+    // 2. Import Categories and remap coverAssetId
+    const catFile = zip.file('categories.json');
+    if (catFile) {
+      const catRaw = await catFile.async('string');
+      const cats = JSON.parse(catRaw);
+      for (const cat of cats) {
+        const remappedCoverId = cat.coverAssetId
+          ? assetIdMap.get(cat.coverAssetId) || cat.coverAssetId
+          : null;
+        const createdCat = await this.prisma.category.create({
+          data: {
+            userId: this.userId,
+            title: cat.title,
+            description: cat.description,
+            color: cat.color,
+            sortOrder: cat.sortOrder || 0,
+            coverAssetId: remappedCoverId,
+          },
+        });
+        categoryIdMap.set(cat.id, createdCat.id);
+        categoriesImported++;
+      }
+    }
+
+    // 3. Pre-scan entries to build entryIdMap for wikilink remapping
+    const entriesFolder = zip.folder('entries');
+    const rawEntryFiles: any[] = [];
+    if (entriesFolder) {
+      entriesFolder.forEach((relativePath, file) => {
+        if (!file.dir && relativePath.endsWith('.json')) {
+          rawEntryFiles.push(file);
+        }
+      });
+    }
+
+    const parsedEntries: any[] = [];
+    for (const file of rawEntryFiles) {
+      const raw = await file.async('string');
+      const data = JSON.parse(raw);
+      const newEntryId = `entry_${crypto.randomUUID()}`;
+      if (data?.entry?.id) {
+        entryIdMap.set(data.entry.id, newEntryId);
+      }
+      parsedEntries.push({ data, newEntryId });
+    }
+
+    // Helper to remap IDs inside document blocks (wikilinks, asset refs)
+    const remapDocContent = (blocks: TopLevelBlock[]): TopLevelBlock[] => {
+      let jsonStr = JSON.stringify(blocks);
+
+      // Remap asset IDs
+      for (const [oldAssetId, newAssetId] of assetIdMap.entries()) {
+        jsonStr = jsonStr.replaceAll(oldAssetId, newAssetId);
+      }
+
+      // Remap entry IDs in wikilinks: [[oldEntryId]] -> [[newEntryId]]
+      for (const [oldEntryId, newEntryId] of entryIdMap.entries()) {
+        jsonStr = jsonStr.replaceAll(`[[${oldEntryId}]]`, `[[${newEntryId}]]`);
+      }
+
+      return JSON.parse(jsonStr);
+    };
+
+    // 4. Create Entries with remapped content
+    for (const { data, newEntryId } of parsedEntries) {
+      const { entry, doc, tags } = data;
+
+      let targetCategoryId = categoryIdMap.get(entry.categoryId);
+      if (!targetCategoryId) {
+        const fallbackCat = await this.prisma.category.findFirst({
+          where: { deletedAt: null },
+        });
+        if (fallbackCat) {
+          targetCategoryId = fallbackCat.id;
+        } else {
+          const newCat = await this.prisma.category.create({
+            data: {
+              userId: this.userId,
+              title: 'Imported Archive',
+              color: '#6366f1',
+            },
+          });
+          targetCategoryId = newCat.id;
+        }
+      }
+
+      const rawBlocks = (doc?.content || []) as TopLevelBlock[];
+      const remappedBlocks = remapDocContent(rawBlocks);
+      const { manifest, chunks } = splitBlocksIntoChunks(remappedBlocks, {
+        existingChunks: [],
+        entryId: newEntryId,
+        version: 1,
+      });
+
+      // Create Entry
+      await this.prisma.entry.create({
+        data: {
+          id: newEntryId,
+          userId: this.userId,
+          categoryId: targetCategoryId,
+          title: entry.title || 'Imported Entry',
+          color: entry.color,
+          pinned: entry.pinned || false,
+          sortOrder: entry.sortOrder || 0,
+          version: 1,
+        },
+      });
+
+      // Write Chunks
+      for (let idx = 0; idx < chunks.length; idx++) {
+        const chunk = chunks[idx];
+        const meta = manifest.chunks[idx];
+        await this.prisma.chunk.create({
+          data: {
+            id: chunk.chunkId,
+            entryId: newEntryId,
+            userId: this.userId,
+            order: meta ? meta.order : idx,
+            checksum: meta ? meta.checksum : '',
+            bytes: meta ? meta.bytes : 0,
+            blockCount: meta ? meta.blockCount : chunk.blocks.length,
+            payload: chunk.blocks as any,
+            version: 1,
+          },
+        });
+      }
+
+      // Write Manifest
+      await this.prisma.entryManifest.create({
+        data: {
+          userId: this.userId,
+          entryId: newEntryId,
+          version: manifest.version,
+          totalBlocks: manifest.totalBlocks,
+          chunkCount: manifest.chunkCount,
+          chunks: manifest.chunks as any,
+          stats: manifest.stats as any,
+        },
+      });
+
+      // Tags
+      if (Array.isArray(tags)) {
+        for (const tagName of tags) {
+          const cleanName = tagName.trim().toLowerCase().replace(/^#/, '');
+          if (!cleanName) continue;
+          const tag = await this.prisma.tag.upsert({
+            where: {
+              userId_name: {
+                userId: this.userId,
+                name: cleanName,
+              },
+            },
+            create: {
+              userId: this.userId,
+              name: cleanName,
+            },
+            update: {},
+          });
+          await this.prisma.entryTag.create({
+            data: {
+              userId: this.userId,
+              entryId: newEntryId,
+              tagId: tag.id,
+            },
+          });
+        }
+      }
+
+      entriesImported++;
     }
 
     return {

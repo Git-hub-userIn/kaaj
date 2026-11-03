@@ -31,17 +31,40 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Handle cache clearing on logout or explicit action
+self.addEventListener('message', (event) => {
+  if (event.data?.action === 'clear-cache' || event.data?.type === 'LOGOUT') {
+    event.waitUntil(
+      caches.keys().then((keys) => {
+        return Promise.all(keys.map((k) => caches.delete(k)));
+      }).then(() => {
+        if (event.ports && event.ports[0]) {
+          event.ports[0].postMessage({ success: true });
+        }
+      })
+    );
+  }
+});
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Skip API routes, WebSockets, non-GET requests
+  // Never cache API routes, WebSockets, auth, sync, share responses, or authenticated calls
   if (
     event.request.method !== 'GET' ||
+    event.request.headers.has('Authorization') ||
     url.pathname.startsWith('/api') ||
-    url.pathname.startsWith('/sync/ws') ||
+    url.pathname.startsWith('/sync') ||
+    url.pathname.startsWith('/auth') ||
+    url.pathname.startsWith('/shared') ||
+    url.pathname.startsWith('/trash') ||
+    url.pathname.startsWith('/search') ||
+    url.pathname.startsWith('/assets') ||
     url.pathname.startsWith('/categories') ||
     url.pathname.startsWith('/entries') ||
-    url.pathname.startsWith('/backup')
+    url.pathname.startsWith('/backup') ||
+    url.pathname.startsWith('/export') ||
+    url.pathname.startsWith('/import')
   ) {
     return;
   }

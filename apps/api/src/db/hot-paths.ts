@@ -385,3 +385,86 @@ export async function hotPathSearchEntries(
     LIMIT ${limit};
   `;
 }
+
+/**
+ * -----------------------------------------------------------------------------
+ * HOT PATH 6: Backlinks Scan via User-Scoped Chunk Payload Search
+ * -----------------------------------------------------------------------------
+ */
+export async function hotPathGetBacklinks(
+  prisma: ScopedPrismaClient | any,
+  params: {
+    userId: string;
+    targetEntryId: string;
+    titlePattern: string;
+    idPattern: string;
+    limit?: number;
+  }
+): Promise<Array<{ id: string; title: string; categoryId: string; updatedAt: Date }>> {
+  const limit = params.limit ?? 50;
+  return await prisma.$queryRaw`
+    SELECT DISTINCT e.id, e.title, e."categoryId", e."updatedAt"
+    FROM "Entry" e
+    JOIN "Chunk" c ON c."entryId" = e.id
+    WHERE e."userId" = ${params.userId}
+      AND e."deletedAt" IS NULL
+      AND e.id != ${params.targetEntryId}
+      AND (
+        c.payload::text ILIKE ${params.titlePattern}
+        OR c.payload::text ILIKE ${params.idPattern}
+      )
+    ORDER BY e."updatedAt" DESC
+    LIMIT ${limit}
+  `;
+}
+
+/**
+ * -----------------------------------------------------------------------------
+ * HOT PATH 7: On This Day Historical Recall (User-Scoped)
+ * -----------------------------------------------------------------------------
+ */
+export async function hotPathGetEntriesOnThisDay(
+  prisma: ScopedPrismaClient | any,
+  params: {
+    userId: string;
+    month: number;
+    day: number;
+    limit?: number;
+  }
+): Promise<Array<{ id: string; title: string; categoryId: string; createdAt: Date; updatedAt: Date }>> {
+  const limit = params.limit ?? 50;
+  return await prisma.$queryRaw`
+    SELECT id, title, "categoryId", "createdAt", "updatedAt"
+    FROM "Entry"
+    WHERE "userId" = ${params.userId}
+      AND "deletedAt" IS NULL
+      AND EXTRACT(MONTH FROM "createdAt") = ${params.month}
+      AND EXTRACT(DAY FROM "createdAt") = ${params.day}
+    ORDER BY "createdAt" DESC
+    LIMIT ${limit}
+  `;
+}
+
+/**
+ * -----------------------------------------------------------------------------
+ * HOT PATH 8: Check if Asset is Referenced Across User Chunks
+ * -----------------------------------------------------------------------------
+ */
+export async function hotPathCheckAssetReferenced(
+  prisma: ScopedPrismaClient | any,
+  params: {
+    userId: string;
+    excludeEntryId: string;
+    assetId: string;
+  }
+): Promise<boolean> {
+  const pattern = `%${params.assetId}%`;
+  const rows: any[] = await prisma.$queryRaw`
+    SELECT c.id FROM "Chunk" c
+    WHERE c."userId" = ${params.userId}
+      AND c."entryId" != ${params.excludeEntryId}
+      AND c.payload::text LIKE ${pattern}
+    LIMIT 1
+  `;
+  return rows.length > 0;
+}

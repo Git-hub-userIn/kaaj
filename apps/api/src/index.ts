@@ -96,7 +96,11 @@ maintenanceScheduler.start();
 
 // Helper to extract authenticated userId from request context
 function getUserId(c: any): string {
-  return (c.get('userId') as string) || 'dev-owner-user';
+  const userId = c.get('userId');
+  if (!userId) {
+    throw new Error('Unauthorized: missing authenticated user context');
+  }
+  return userId as string;
 }
 
 app.get('/health', (c) => {
@@ -640,6 +644,53 @@ app.get('/shared/:token', async (c) => {
   return c.json(shared);
 });
 
+app.get('/shared/:token/assets/:assetId', async (c) => {
+  const token = c.req.param('token');
+  const assetId = c.req.param('assetId');
+  const access = await CategoriesService.getSharedEntryAsset(token, assetId);
+  if (!access) {
+    return c.text('Asset not found or access denied', 404);
+  }
+
+  const userStore = assetStore.forUser(access.userId);
+  const record = await userStore.getRecord(assetId);
+  if (!record) {
+    return c.text('Asset not found', 404);
+  }
+
+  const data = await userStore.get(record.storageKey);
+  if (!data) {
+    return c.text('Asset data not found', 404);
+  }
+
+  return new Response(new Uint8Array(data), {
+    headers: { 'Content-Type': record.mime, 'Cache-Control': 'no-store' },
+  });
+});
+
+app.get('/shared/:token/assets/:assetId/thumb', async (c) => {
+  const token = c.req.param('token');
+  const assetId = c.req.param('assetId');
+  const access = await CategoriesService.getSharedEntryAsset(token, assetId);
+  if (!access) {
+    return c.text('Thumbnail not found or access denied', 404);
+  }
+
+  const userStore = assetStore.forUser(access.userId);
+  const sizeParam = c.req.query('size') === '960' ? '960' : '320';
+  const data = await userStore.getThumb(assetId, sizeParam);
+  if (!data) {
+    return c.text('Thumbnail not found', 404);
+  }
+
+  return new Response(new Uint8Array(data), {
+    headers: {
+      'Content-Type': 'image/webp',
+      'Cache-Control': 'no-store',
+    },
+  });
+});
+
 app.post('/migrate', async (c) => {
   try {
     const res = await categoriesService.forUser(getUserId(c)).runMigration();
@@ -814,6 +865,12 @@ app.post('/import/zip', async (c) => {
     const result = await svc.importZip(buffer);
     return c.json({ success: true, ...result });
   } catch (err: any) {
+    if (err.statusCode === 413 || err.message?.includes('exceeds maximum allowed size')) {
+      return c.json({ error: err.message || 'Archive exceeds maximum size of 50 MB' }, 413);
+    }
+    if (err.statusCode === 400 || err.message?.includes('Malicious zip')) {
+      return c.json({ error: err.message || 'Invalid zip archive' }, 400);
+    }
     console.error('Import zip error:', err);
     return c.json({ error: err.message || 'ZIP import failed' }, 500);
   }
@@ -1007,26 +1064,60 @@ app.get('/auth/google/status', (c) => {
 const { upgradeWebSocket, websocket } = createBunWebSocket();
 const wsSyncService = new WsSyncService(categoriesService, maintenanceService);
 
-function resolveWsClientUser(c: any): string | null {
+interface WsAuthResult {
+  userId: string;
+  expiresAt?: number;
+}
+
+function resolveWsClientUser(c: any): WsAuthResult | null {
   const token =
     c.req.query('token') ||
     c.req.header('Authorization')?.replace('Bearer ', '').trim() ||
-    c.req.header('sec-websocket-protocol') ||
-    c.req.header('x-user-id');
+    c.req.header('sec-websocket-protocol');
 
-  if (!token) return 'dev-owner-user';
+  if (!token) return null;
 
   const trimmed = token.trim();
+
+  // Expiring token format: exp:<timestamp_ms>:<userId>
+  if (trimmed.startsWith('exp:')) {
+    const parts = trimmed.split(':');
+    if (parts.length >= 3) {
+      const expMs = Number(parts[1]);
+      const uid = parts.slice(2).join(':');
+      if (Number.isFinite(expMs)) {
+        if (Date.now() >= expMs) {
+          return null; // Expired
+        }
+        return { userId: uid, expiresAt: expMs };
+      }
+    }
+  }
+
+  // Explicit query param expiresAt
+  const qExp = Number(c.req.query('expiresAt'));
+  const hasValidQueryExp = Number.isFinite(qExp) && qExp > 0;
+  if (hasValidQueryExp && Date.now() >= qExp) {
+    return null; // Expired
+  }
+
   if (trimmed.startsWith('user:')) {
-    return trimmed.slice(5).trim();
+    const uid = trimmed.slice(5).trim();
+    return { userId: uid, expiresAt: hasValidQueryExp ? qExp : undefined };
   }
   if (trimmed.startsWith('token-user-')) {
-    return trimmed.replace('token-', '').trim();
+    const uid = trimmed.replace('token-', '').trim();
+    return { userId: uid, expiresAt: hasValidQueryExp ? qExp : undefined };
   }
-  if (trimmed === 'kaaj-local-dev-token' || trimmed === 'dev-secret-token') {
-    return 'dev-owner-user';
+  if (
+    trimmed === 'kaaj-local-dev-token' ||
+    trimmed === 'dev-secret-token' ||
+    trimmed === (process.env.DEV_AUTH_TOKEN || '')
+  ) {
+    return { userId: 'dev-owner-user', expiresAt: hasValidQueryExp ? qExp : undefined };
   }
-  return trimmed;
+
+  return null;
 }
 
 function parseRoom(c: any): { roomKey: string; roomUserId: string; entryId: string } | null {
@@ -1042,16 +1133,18 @@ function parseRoom(c: any): { roomKey: string; roomUserId: string; entryId: stri
 }
 
 const handleWsUpgrade = upgradeWebSocket(async (c) => {
-  const clientUser = resolveWsClientUser(c);
+  const auth = resolveWsClientUser(c);
   const parsedRoom = parseRoom(c);
 
-  if (!clientUser || !parsedRoom) {
+  if (!auth || !parsedRoom) {
     return {
       onOpen(_event, ws) {
-        ws.close(4400, 'Invalid room format or missing credentials');
+        ws.close(4401, 'Unauthorized: missing or invalid credentials');
       },
     };
   }
+
+  const clientUser = auth.userId;
 
   // Cross-user room isolation check
   if (parsedRoom.roomUserId !== clientUser) {
@@ -1070,6 +1163,23 @@ const handleWsUpgrade = upgradeWebSocket(async (c) => {
   return {
     onOpen(_event, ws) {
       const socket = (ws as any).raw || ws;
+
+      // Handle mid-session token expiry
+      if (auth.expiresAt) {
+        const remainingMs = auth.expiresAt - Date.now();
+        if (remainingMs <= 0) {
+          ws.close(4401, 'Token expired mid-session');
+          return;
+        }
+        const timer = setTimeout(() => {
+          try {
+            ws.close(4401, 'Token expired mid-session');
+          } catch {}
+        }, remainingMs);
+
+        (socket as any)._expiryTimer = timer;
+      }
+
       wsSyncService.handleClientConnected(room, socket);
     },
     onMessage(event, ws) {
@@ -1079,6 +1189,9 @@ const handleWsUpgrade = upgradeWebSocket(async (c) => {
     },
     onClose(_event, ws) {
       const socket = (ws as any).raw || ws;
+      if ((socket as any)._expiryTimer) {
+        clearTimeout((socket as any)._expiryTimer);
+      }
       wsSyncService.handleClientDisconnected(room, socket);
     },
   };
