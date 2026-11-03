@@ -60,6 +60,10 @@ const categoriesService = new CategoriesService(baseDataDir, assetStore, seedCov
 // Check PostgreSQL connectivity at startup (fail fast with clear diagnostics)
 await checkPostgresReachable();
 
+if (process.env.NODE_ENV === 'production') {
+  console.log('[Security] Production mode active: unsigned dev tokens, test-mode rate limits, and unauthenticated dev asset fallbacks are strictly disabled.');
+}
+
 const defaultBackupDir = process.env.BACKUP_DIR || path.resolve(repoRoot, 'data', 'backup-snapshots');
 const tokenFilePath = process.env.GOOGLE_TOKEN_FILE || path.resolve(baseDataDir, 'google-oauth.json');
 const cacheFilePath = process.env.GOOGLE_DRIVE_CACHE_FILE || path.resolve(baseDataDir, 'drive-file-cache.json');
@@ -1070,12 +1074,18 @@ interface WsAuthResult {
 }
 
 function resolveWsClientUser(c: any): WsAuthResult | null {
+  const isProduction = process.env.NODE_ENV === 'production';
   const token =
     c.req.query('token') ||
     c.req.header('Authorization')?.replace('Bearer ', '').trim() ||
     c.req.header('sec-websocket-protocol');
 
   if (!token) return null;
+
+  // In production mode, strictly reject unsigned dev tokens
+  if (isProduction) {
+    return null;
+  }
 
   const trimmed = token.trim();
 

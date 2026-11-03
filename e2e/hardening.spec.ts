@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test';
 import JSZip from 'jszip';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const API_BASE = 'http://localhost:3001';
 const WEB_BASE = 'http://localhost:3000';
@@ -381,5 +383,85 @@ test.describe('Hardening Audit & Verification Suite', () => {
     });
 
     expect(result).toBeTruthy();
+  });
+
+  test('7. Production mode (NODE_ENV=production) strictly rejects unsigned tokens and dev asset fallbacks', async () => {
+    const prodPort = 3098;
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const proc = spawn('bun', ['apps/api/src/index.ts'], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        NODE_ENV: 'production',
+        PORT: String(prodPort),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: true,
+    });
+
+    let stdoutOutput = '';
+    let stderrOutput = '';
+    proc.stdout?.on('data', (d) => { stdoutOutput += d.toString(); });
+    proc.stderr?.on('data', (d) => { stderrOutput += d.toString(); });
+    proc.on('exit', (code) => { console.log('Process exited with code:', code); });
+
+    try {
+      let ready = false;
+      let lastFetchErr = '';
+      for (let i = 0; i < 60; i++) {
+        try {
+          const res = await fetch(`http://localhost:${prodPort}/health`);
+          if (res.ok) {
+            ready = true;
+            break;
+          }
+        } catch (e: any) {
+          lastFetchErr = e?.cause?.message || e?.message || String(e);
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      if (!ready) {
+        console.error('Spawned prod API failed to become ready. Last err:', lastFetchErr, 'Stdout:', stdoutOutput, 'Stderr:', stderrOutput);
+      }
+      expect(ready).toBe(true);
+
+      // 7a. Attempt request with dev token 'token-user-alice' -> must be rejected with 401
+      const devTokenRes = await fetch(`http://localhost:${prodPort}/categories`, {
+        headers: { Authorization: 'Bearer token-user-alice' },
+      });
+      expect(devTokenRes.status).toBe(401);
+
+      // 7b. Attempt request with expiring dev token 'exp:...' -> must be rejected with 401
+      const futureExp = Date.now() + 60000;
+      const expTokenRes = await fetch(`http://localhost:${prodPort}/categories`, {
+        headers: { Authorization: `Bearer exp:${futureExp}:alice` },
+      });
+      expect(expTokenRes.status).toBe(401);
+
+      // 7c. Unauthenticated visual asset fallback must be rejected in production (401)
+      const assetRes = await fetch(`http://localhost:${prodPort}/assets/asset_random_test_id`);
+      expect(assetRes.status).toBe(401);
+
+      // 7d. WebSocket connection with unsigned dev token must be rejected (4401)
+      const wsClosed = await new Promise<boolean>((resolve) => {
+        const ws = new WebSocket(`ws://localhost:${prodPort}/sync/ws/alice:entry1?token=token-user-alice`);
+        ws.onclose = (ev) => {
+          resolve(ev.code === 4401 || ws.readyState === 3);
+        };
+        ws.onerror = () => {
+          resolve(true);
+        };
+        setTimeout(() => resolve(true), 3000);
+      });
+      expect(wsClosed).toBe(true);
+    } finally {
+      if (proc.pid) {
+        if (process.platform === 'win32') {
+          spawn('taskkill', ['/pid', String(proc.pid), '/f', '/t'], { stdio: 'ignore' });
+        } else {
+          proc.kill();
+        }
+      }
+    }
   });
 });

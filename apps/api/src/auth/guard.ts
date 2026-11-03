@@ -13,7 +13,7 @@ const userRateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
 export function checkRateLimit(
   userId: string,
-  limit = process.env.APP_MODE === 'test' ? 50000 : 300,
+  limit = (process.env.NODE_ENV !== 'production' && process.env.APP_MODE === 'test') ? 50000 : 300,
   windowMs = 60000
 ): { allowed: boolean; remaining: number } {
   const now = Date.now();
@@ -30,8 +30,8 @@ export function checkRateLimit(
 }
 
 export async function authGuard(c: Context, next: Next): Promise<Response | void> {
-  // Routes handled independently (public shares, WebSocket auth handler)
-  if (c.req.path.startsWith('/shared/') || c.req.path.startsWith('/sync/ws')) {
+  // Routes handled independently (public health, shares, WebSocket auth handler)
+  if (c.req.path === '/health' || c.req.path.startsWith('/shared/') || c.req.path.startsWith('/sync/ws')) {
     return await next();
   }
 
@@ -43,7 +43,16 @@ export async function authGuard(c: Context, next: Next): Promise<Response | void
   let resolvedUserId: string | null = null;
 
   if (!isProduction && token) {
-    if (token.startsWith('user:')) {
+    if (token.startsWith('exp:')) {
+      const parts = token.split(':');
+      if (parts.length >= 3) {
+        const expMs = Number(parts[1]);
+        const uid = parts.slice(2).join(':');
+        if (Number.isFinite(expMs) && Date.now() < expMs) {
+          resolvedUserId = uid;
+        }
+      }
+    } else if (token.startsWith('user:')) {
       resolvedUserId = token.slice(5).trim();
     } else if (token.startsWith('token-user-')) {
       resolvedUserId = token.replace('token-', '').trim();
