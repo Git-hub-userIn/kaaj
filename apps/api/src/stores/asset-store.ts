@@ -165,10 +165,24 @@ export class LocalDiskAssetStore {
       getThumb: async (id: string, size: '320' | '960'): Promise<Buffer | null> => {
         try {
           // Ownership verification: ensure id belongs to userId
+          let hasAccess = false;
+          let storageKey = '';
           const record = await prisma.assetMeta.findFirst({
             where: { id, userId },
           });
-          if (!record) return null;
+          if (record) {
+            hasAccess = true;
+            storageKey = record.storageKey;
+          } else {
+            const cat = await prisma.category.findFirst({
+              where: { coverAssetId: id, userId },
+            });
+            if (cat) {
+              hasAccess = true;
+              storageKey = `${id}.png`;
+            }
+          }
+          if (!hasAccess) return null;
 
           const thumbPath = path.join(userThumbsDir, `${id}_${size}.webp`);
           const legacyThumbPath = path.join(this.baseDir, 'thumbs', `${id}_${size}.webp`);
@@ -181,7 +195,7 @@ export class LocalDiskAssetStore {
           }
 
           // On-demand generation if missing
-          const orig = await this.forUser(userId, prisma).get(record.storageKey);
+          const orig = await this.forUser(userId, prisma).get(storageKey);
           if (!orig) return null;
 
           const targetWidth = size === '960' ? 960 : 320;
@@ -216,19 +230,43 @@ export class LocalDiskAssetStore {
         const meta = await prisma.assetMeta.findFirst({
           where: { id, userId },
         });
-        if (!meta) return null;
-        return {
-          id: meta.id,
-          storageKey: meta.storageKey,
-          mime: meta.mime,
-          bytes: meta.bytes,
-          width: meta.width ?? undefined,
-          height: meta.height ?? undefined,
-          originalName: meta.originalName ?? undefined,
-          checksum: meta.checksum,
-          createdAt: meta.createdAt.toISOString(),
-          userId: meta.userId,
-        };
+        if (meta) {
+          return {
+            id: meta.id,
+            storageKey: meta.storageKey,
+            mime: meta.mime,
+            bytes: meta.bytes,
+            width: meta.width ?? undefined,
+            height: meta.height ?? undefined,
+            originalName: meta.originalName ?? undefined,
+            checksum: meta.checksum,
+            createdAt: meta.createdAt.toISOString(),
+            userId: meta.userId,
+          };
+        }
+        const cat = await prisma.category.findFirst({
+          where: { coverAssetId: id, userId },
+        });
+        if (cat) {
+          const candidates = [`${id}.png`, `${id}.jpg`, `${id}.webp`, id];
+          for (const cand of candidates) {
+            const p = path.join(userVaultDir, cand);
+            const leg = path.join(this.baseDir, cand);
+            const foundPath = fsSync.existsSync(p) ? p : (fsSync.existsSync(leg) ? leg : null);
+            if (foundPath) {
+              const stat = await fs.stat(foundPath).catch(() => null);
+              return {
+                id,
+                storageKey: cand,
+                mime: 'image/png',
+                bytes: stat?.size || 0,
+                createdAt: new Date().toISOString(),
+                userId,
+              };
+            }
+          }
+        }
+        return null;
       },
 
       getAllRecords: async (): Promise<AssetRecord[]> => {
