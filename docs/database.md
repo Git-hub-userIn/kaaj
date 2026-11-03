@@ -174,3 +174,28 @@ Raw SQL statements in `apps/api/src/db/hot-paths.ts` require an explicit `userId
 - Dynamic matching eliminates desynchronization between text chunks and separate link indices.
 - Cascade deletion automatically cleans up associated `EntryTag` links when entries or tags are deleted.
 
+---
+
+## 11. Share Links Architecture
+
+### 11.1 Schema Models
+1. **ShareLink**:
+   - `id`: String (PK)
+   - `token`: String (unique, unguessable cryptographic token, indexed)
+   - `userId`: String (FK -> User.id, indexed)
+   - `entryId`: String (FK -> Entry.id, indexed)
+   - `expiresAt`: DateTime (nullable)
+   - `revokedAt`: DateTime (nullable)
+   - `createdAt`: DateTime
+   - `updatedAt`: DateTime
+
+### 11.2 Access Rules and Security
+- Generating and revoking share links requires authentication and entry ownership.
+- Public route `/shared/:token` bypasses auth guard and checks:
+  1. Token matches an existing `ShareLink` record.
+  2. `revokedAt` is null.
+  3. `expiresAt` is null or in the future.
+  4. The referenced `Entry` is not soft-deleted.
+- Read-only response serves document structure without mutating ownership or timestamps.
+
+

@@ -559,6 +559,65 @@ app.get('/entries/:id/backlinks', async (c) => {
   return c.json(backlinks);
 });
 
+// Share Links Endpoints (User-Scoped & Public)
+app.post('/entries/:id/share', async (c) => {
+  const id = c.req.param('id');
+  const userId = getUserId(c);
+  let expiresInDays: number | undefined;
+  try {
+    const body = await c.req.json();
+    if (typeof body?.expiresInDays === 'number') {
+      expiresInDays = body.expiresInDays;
+    }
+  } catch {}
+
+  const link = await categoriesService.forUser(userId).createShareLink(id, expiresInDays);
+  if (!link) {
+    return c.json({ error: 'Entry not found' }, 404);
+  }
+  return c.json(link, 201);
+});
+
+app.get('/entries/:id/share', async (c) => {
+  const id = c.req.param('id');
+  const userId = getUserId(c);
+  const links = await categoriesService.forUser(userId).listShareLinks(id);
+  if (!links) {
+    return c.json({ error: 'Entry not found' }, 404);
+  }
+  return c.json(links);
+});
+
+app.delete('/entries/:id/share/:linkId', async (c) => {
+  const id = c.req.param('id');
+  const linkId = c.req.param('linkId');
+  const userId = getUserId(c);
+  const ok = await categoriesService.forUser(userId).revokeShareLink(id, linkId);
+  if (!ok) {
+    return c.json({ error: 'Share link not found or already revoked' }, 404);
+  }
+  return c.json({ success: true });
+});
+
+app.delete('/entries/:id/share', async (c) => {
+  const id = c.req.param('id');
+  const userId = getUserId(c);
+  const ok = await categoriesService.forUser(userId).revokeShareLink(id);
+  if (!ok) {
+    return c.json({ error: 'No active share links found' }, 404);
+  }
+  return c.json({ success: true });
+});
+
+app.get('/shared/:token', async (c) => {
+  const token = c.req.param('token');
+  const shared = await CategoriesService.getSharedEntry(token);
+  if (!shared) {
+    return c.json({ error: 'Shared entry not found, expired, or revoked' }, 404);
+  }
+  return c.json(shared);
+});
+
 app.post('/migrate', async (c) => {
   try {
     const res = await categoriesService.forUser(getUserId(c)).runMigration();

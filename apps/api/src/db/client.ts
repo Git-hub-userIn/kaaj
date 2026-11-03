@@ -42,6 +42,7 @@ const USER_OWNED_MODELS = new Set([
   'JobLease',
   'Tag',
   'EntryTag',
+  'ShareLink',
 ]);
 
 export function resolveDatabaseUrl(overrideUrl?: string): string {
@@ -225,6 +226,19 @@ export async function checkPostgresReachable(targetPrisma?: ScopedPrismaClient |
     console.error('================================================================================');
     throw new Error(`PostgreSQL connectivity check failed: ${message}`);
   }
+}
+
+/**
+ * Locate a share link by token across the database (for public shared links).
+ */
+export async function findShareLinkByToken(token: string) {
+  const base = getBasePrismaClient();
+  return await base.shareLink.findUnique({
+    where: { token },
+    include: {
+      entry: true,
+    },
+  });
 }
 
 /**

@@ -30,6 +30,11 @@ export function checkRateLimit(
 }
 
 export async function authGuard(c: Context, next: Next): Promise<Response | void> {
+  // Public routes that bypass user authentication
+  if (c.req.path.startsWith('/shared/')) {
+    return await next();
+  }
+
   const isProduction = process.env.NODE_ENV === 'production';
   const authHeader = c.req.header('Authorization');
   const xUserId = c.req.header('x-user-id');

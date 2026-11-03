@@ -51,10 +51,11 @@ import {
 import { ensureFontLoaded } from './font-loader.js';
 import { GlobalBackupStatus } from '../backup/GlobalBackupStatus.js';
 import { API_BASE_URL, AUTH_TOKEN, getAuthToken, getUserId, getWsUrl, getAuthHeaders } from '../../config/api.js';
-import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff, History, ListTree, Link2, Tag } from 'lucide-react';
+import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff, History, ListTree, Link2, Tag, Share2 } from 'lucide-react';
 import { RevisionHistoryDrawer } from './RevisionHistoryDrawer.js';
 import { OutlineSidebar } from './OutlineSidebar.js';
 import { BacklinksDrawer } from './BacklinksDrawer.js';
+import { ShareModal } from './ShareModal.js';
 import { CalloutExtension } from './extensions/callout.js';
 import { Table } from '@tiptap/extension-table';
 import { TableRow } from '@tiptap/extension-table-row';
@@ -109,6 +110,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [backlinksOpen, setBacklinksOpen] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
   const [tags, setTags] = useState<{ id: string; name: string }[]>([]);
   const [newTagInput, setNewTagInput] = useState('');
   const [tagInputVisible, setTagInputVisible] = useState(false);
@@ -1427,6 +1429,31 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
               <span>Backlinks</span>
             </button>
 
+            {/* Share Link Button */}
+            <button
+              type="button"
+              data-testid="toolbar-share-btn"
+              onClick={() => setShareModalOpen(true)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                backgroundColor: 'transparent',
+                border: `1px solid ${COLOR_TOKENS.paperDark}`,
+                borderRadius: RADIUS_TOKENS.sm,
+                cursor: 'pointer',
+                color: COLOR_TOKENS.inkMuted,
+                fontSize: '13px',
+                padding: '4px 8px',
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                transition: 'all 0.15s ease',
+              }}
+              title="Share document link"
+            >
+              <Share2 size={13} aria-hidden="true" />
+              <span>Share</span>
+            </button>
+
             {/* Quiet Save Status */}
             <button
               type="button"
@@ -1887,6 +1914,12 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         entryId={entryId}
         isOpen={backlinksOpen}
         onClose={() => setBacklinksOpen(false)}
+      />
+
+      <ShareModal
+        entryId={entryId}
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
       />
     </div>
   );

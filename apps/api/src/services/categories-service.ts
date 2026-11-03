@@ -27,7 +27,7 @@ import {
   type TopLevelBlock,
 } from '@kaaj/doc-model';
 import type { LocalDiskAssetStore } from '../stores/asset-store.js';
-import { forUser, type ScopedPrismaClient } from '../db/client.js';
+import { forUser, findShareLinkByToken, type ScopedPrismaClient } from '../db/client.js';
 import {
   hotPathSaveChunkedEntry,
   hotPathVersionCheckedUpdateEntry,
@@ -1062,5 +1062,118 @@ export class CategoriesService {
       categoryId: r.categoryId,
       updatedAt: new Date(r.updatedAt).toISOString(),
     }));
+  }
+
+  async createShareLink(
+    entryId: string,
+    expiresInDays?: number
+  ): Promise<{ id: string; token: string; entryId: string; expiresAt: string | null; createdAt: string } | null> {
+    await this.init();
+    const entry = await this.prisma.entry.findFirst({
+      where: { id: entryId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!entry) return null;
+
+    const token = crypto.randomBytes(16).toString('hex');
+    const expiresAt = expiresInDays && expiresInDays > 0 ? new Date(Date.now() + expiresInDays * 86400000) : null;
+
+    const link = await this.prisma.shareLink.create({
+      data: {
+        token,
+        entryId,
+        userId: this.userId,
+        expiresAt,
+      },
+    });
+
+    return {
+      id: link.id,
+      token: link.token,
+      entryId: link.entryId,
+      expiresAt: link.expiresAt ? link.expiresAt.toISOString() : null,
+      createdAt: link.createdAt.toISOString(),
+    };
+  }
+
+  async listShareLinks(entryId: string) {
+    await this.init();
+    const entry = await this.prisma.entry.findFirst({
+      where: { id: entryId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!entry) return null;
+
+    const links = await this.prisma.shareLink.findMany({
+      where: {
+        entryId,
+        userId: this.userId,
+        revokedAt: null,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return links.map((l) => ({
+      id: l.id,
+      token: l.token,
+      entryId: l.entryId,
+      expiresAt: l.expiresAt ? l.expiresAt.toISOString() : null,
+      createdAt: l.createdAt.toISOString(),
+    }));
+  }
+
+  async revokeShareLink(entryId: string, linkId?: string): Promise<boolean> {
+    await this.init();
+    const entry = await this.prisma.entry.findFirst({
+      where: { id: entryId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!entry) return false;
+
+    const where: any = {
+      entryId,
+      userId: this.userId,
+      revokedAt: null,
+    };
+    if (linkId) {
+      where.id = linkId;
+    }
+
+    const updated = await this.prisma.shareLink.updateMany({
+      where,
+      data: {
+        revokedAt: new Date(),
+      },
+    });
+
+    return updated.count > 0;
+  }
+
+  static async getSharedEntry(token: string) {
+    const link = await findShareLinkByToken(token);
+    if (!link) return null;
+    if (link.revokedAt !== null) return null;
+    if (link.expiresAt && link.expiresAt < new Date()) return null;
+    if (!link.entry || link.entry.deletedAt !== null) return null;
+
+    const userClient = forUser(link.userId);
+    const chunks = await userClient.chunk.findMany({
+      where: { entryId: link.entryId },
+      orderBy: { order: 'asc' },
+    });
+
+    const reassembled = reassembleDocFromChunks(
+      chunks.map((c: any) => ({ blocks: c.payload as TopLevelBlock[] }))
+    );
+
+    return {
+      id: link.entry.id,
+      title: link.entry.title,
+      version: link.entry.version,
+      stats: link.entry.stats,
+      doc: reassembled.doc,
+      createdAt: link.entry.createdAt.toISOString(),
+      updatedAt: link.entry.updatedAt.toISOString(),
+    };
   }
 }

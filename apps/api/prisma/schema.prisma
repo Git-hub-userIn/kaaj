@@ -24,6 +24,7 @@ model User {
   revisions        EntryRevision[]
   tags             Tag[]
   entryTags        EntryTag[]
+  shareLinks       ShareLink[]
 }
 
 model Category {
@@ -72,6 +73,7 @@ model Entry {
   chunks        Chunk[]
   revisions     EntryRevision[]
   tags          EntryTag[]
+  shareLinks    ShareLink[]
 
   @@index([userId])
   @@index([categoryId])
@@ -213,4 +215,23 @@ model EntryTag {
   @@index([entryId])
   @@index([tagId])
 }
+
+model ShareLink {
+  id        String    @id @default(uuid())
+  token     String    @unique
+  userId    String    @default("dev-owner-user")
+  entryId   String
+  expiresAt DateTime?
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entry     Entry     @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+  @@index([entryId])
+}
+
 

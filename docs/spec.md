@@ -482,3 +482,20 @@ kaaj/
 - Backlink queries return referring entries belonging to the authenticated user.
 - Enforce strict user isolation on all tag and backlink endpoints. Cross-user requests return 404 or 403.
 
+## 24. Read-Only Share Links (LOCKED)
+
+### 24.1 Link Capabilities
+- Generate unique, secure, unguessable access tokens for individual entries.
+- Share links provide read-only access to entry snapshots.
+- Support optional expiry timestamps.
+- Support immediate revocation by the owner.
+- Disallow edits, deletions, or category changes via share links.
+
+### 24.2 Endpoints
+- `POST /entries/:id/share`: Generate a new share token for an entry.
+- `GET /entries/:id/share`: List active share tokens for an entry.
+- `DELETE /entries/:id/share/:linkId`: Revoke a share token immediately.
+- `GET /shared/:token`: Public unauthenticated endpoint returning read-only entry content.
+- Cross-user revocation or inspection attempts return 404 or 403.
+
+
