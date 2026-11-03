@@ -260,6 +260,7 @@ export class LocalDiskAssetStore {
                 storageKey: cand,
                 mime: 'image/png',
                 bytes: stat?.size || 0,
+                checksum: '',
                 createdAt: new Date().toISOString(),
                 userId,
               };
