@@ -13,7 +13,7 @@ const userRateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
 export function checkRateLimit(
   userId: string,
-  limit = 300,
+  limit = process.env.APP_MODE === 'test' ? 50000 : 300,
   windowMs = 60000
 ): { allowed: boolean; remaining: number } {
   const now = Date.now();
@@ -50,6 +50,11 @@ export async function authGuard(c: Context, next: Next): Promise<Response | void
     } else if (token === DEV_TOKEN || token === 'kaaj-local-dev-token' || token === 'dev-secret-token') {
       resolvedUserId = 'dev-owner-user';
     }
+  }
+
+  // Visual assets in non-production allow fallback to dev user when requested without auth headers (e.g. browser <img> tags)
+  if (!resolvedUserId && !isProduction && (c.req.path.startsWith('/assets/') || c.req.path.startsWith('/covers/'))) {
+    resolvedUserId = 'dev-owner-user';
   }
 
   if (!resolvedUserId) {
