@@ -464,4 +464,51 @@ test.describe('Hardening Audit & Verification Suite', () => {
       }
     }
   });
+
+  test('8. Enforces per-user storage quota (env-configurable) and returns 413 when quota is exceeded', async ({
+    request,
+  }) => {
+    const png1x1 = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64'
+    );
+
+    // 8a. Upload with an artificially low quota (e.g. 50 bytes) where the payload exceeds limit
+    const quotaExceededRes = await request.post(`${API_BASE}/assets`, {
+      headers: {
+        ...ALICE_AUTH,
+        'x-test-storage-quota': '50',
+      },
+      multipart: {
+        file: {
+          name: 'tiny.png',
+          mimeType: 'image/png',
+          buffer: png1x1,
+        },
+      },
+    });
+
+    expect(quotaExceededRes.status()).toBe(413);
+    const body = await quotaExceededRes.json();
+    expect(body.error).toContain('Upload quota exceeded');
+
+    // 8b. Upload with a sufficient quota succeeds (201)
+    const allowedRes = await request.post(`${API_BASE}/assets`, {
+      headers: {
+        ...ALICE_AUTH,
+        'x-test-storage-quota': '10485760',
+      },
+      multipart: {
+        file: {
+          name: 'allowed.png',
+          mimeType: 'image/png',
+          buffer: png1x1,
+        },
+      },
+    });
+
+    expect(allowedRes.status()).toBe(201);
+    const allowedBody = await allowedRes.json();
+    expect(allowedBody.asset.id).toBeDefined();
+  });
 });

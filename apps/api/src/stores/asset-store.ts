@@ -18,10 +18,29 @@ export interface AssetRecord {
   userId?: string;
 }
 
-export const MAX_USER_STORAGE_BYTES = 500 * 1024 * 1024; // 500 MB quota per user
+export const MAX_USER_STORAGE_BYTES = 500 * 1024 * 1024; // 500 MB default quota per user
+
+export function getUserStorageQuotaBytes(override?: number): number {
+  if (typeof override === 'number' && Number.isFinite(override) && override > 0) {
+    return override;
+  }
+  const envVal = process.env.USER_STORAGE_QUOTA_BYTES || process.env.MAX_USER_STORAGE_BYTES;
+  if (envVal) {
+    const parsed = Number(envVal);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return MAX_USER_STORAGE_BYTES;
+}
 
 export interface ScopedAssetStore {
-  put(buffer: Buffer, mime: string, originalName?: string): Promise<{ asset: AssetRecord; thumb320: Buffer; thumb960: Buffer }>;
+  put(
+    buffer: Buffer,
+    mime: string,
+    originalName?: string,
+    quotaBytesOverride?: number
+  ): Promise<{ asset: AssetRecord; thumb320: Buffer; thumb960: Buffer }>;
   get(storageKey: string): Promise<Buffer | null>;
   getThumb(id: string, size: '320' | '960'): Promise<Buffer | null>;
   delete(storageKey: string): Promise<void>;
@@ -57,7 +76,7 @@ export class LocalDiskAssetStore {
     const userThumbsDir = this.getUserThumbsDir(userId);
 
     return {
-      put: async (buffer: Buffer, mime: string, originalName?: string) => {
+      put: async (buffer: Buffer, mime: string, originalName?: string, quotaBytesOverride?: number) => {
         await this.initUserVault(userId);
 
         // Verify magic bytes
@@ -70,14 +89,15 @@ export class LocalDiskAssetStore {
           throw new Error('Unsupported image format. Allowed formats: JPEG, PNG, WebP, GIF.');
         }
 
-        // Check user quota (500 MB)
+        // Check user quota (env-configurable, default 500 MB)
+        const quotaLimit = getUserStorageQuotaBytes(quotaBytesOverride);
         const aggregate = await prisma.assetMeta.aggregate({
           _sum: { bytes: true },
           where: { userId },
         });
         const currentBytes = aggregate._sum.bytes || 0;
-        if (currentBytes + buffer.length > MAX_USER_STORAGE_BYTES) {
-          const err: any = new Error('Upload quota exceeded (500 MB limit).');
+        if (currentBytes + buffer.length > quotaLimit) {
+          const err: any = new Error(`Upload quota exceeded (${quotaLimit} bytes limit).`);
           err.statusCode = 413;
           throw err;
         }

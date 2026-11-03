@@ -725,7 +725,9 @@ app.post('/assets', async (c) => {
 
     const fileName = file instanceof File ? file.name : 'upload.png';
     const userStore = assetStore.forUser(userId);
-    const { asset } = await userStore.put(buffer, file.type, fileName);
+    const testQuotaHeader = process.env.APP_MODE === 'test' ? c.req.header('x-test-storage-quota') : undefined;
+    const testQuota = testQuotaHeader ? Number(testQuotaHeader) : undefined;
+    const { asset } = await userStore.put(buffer, file.type, fileName, testQuota);
 
     return c.json({
       success: true,
