@@ -56,7 +56,6 @@ const baseDataDir = path.resolve(repoRoot, 'data');
 const seedCoversDir = path.resolve(repoRoot, 'packages', 'design', 'assets', 'seed-covers');
 
 const assetStore = new LocalDiskAssetStore(storageDir);
-const categoriesService = new CategoriesService(baseDataDir, assetStore, seedCoversDir);
 
 // Check PostgreSQL connectivity at startup (fail fast with clear diagnostics)
 await checkPostgresReachable();
@@ -90,6 +89,15 @@ const activeBackupTarget =
     : googleDriveTarget.hasValidAuth()
     ? googleDriveTarget
     : localBackupTarget;
+
+const categoriesService = new CategoriesService(
+  baseDataDir,
+  assetStore,
+  seedCoversDir,
+  undefined,
+  undefined,
+  activeBackupTarget
+);
 
 const backupService = new BackupService(baseDataDir, activeBackupTarget);
 const maintenanceService = new MaintenanceService(baseDataDir, activeBackupTarget);

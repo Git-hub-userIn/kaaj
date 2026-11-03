@@ -459,12 +459,21 @@ export async function hotPathCheckAssetReferenced(
   }
 ): Promise<boolean> {
   const pattern = `%${params.assetId}%`;
-  const rows: any[] = await prisma.$queryRaw`
+  const chunkRows: any[] = await prisma.$queryRaw`
     SELECT c.id FROM "Chunk" c
     WHERE c."userId" = ${params.userId}
       AND c."entryId" != ${params.excludeEntryId}
       AND c.payload::text LIKE ${pattern}
     LIMIT 1
   `;
-  return rows.length > 0;
+  if (chunkRows.length > 0) return true;
+
+  const revisionRows: any[] = await prisma.$queryRaw`
+    SELECT r.id FROM "EntryRevision" r
+    WHERE r."userId" = ${params.userId}
+      AND r."entryId" != ${params.excludeEntryId}
+      AND (r.doc::text LIKE ${pattern} OR r.manifest::text LIKE ${pattern})
+    LIMIT 1
+  `;
+  return revisionRows.length > 0;
 }

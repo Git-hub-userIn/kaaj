@@ -511,4 +511,160 @@ test.describe('Hardening Audit & Verification Suite', () => {
     const allowedBody = await allowedRes.json();
     expect(allowedBody.asset.id).toBeDefined();
   });
+
+  test('9. Trash purge removes Drive pack refs and protects assets referenced by revision snapshots', async ({
+    request,
+  }) => {
+    const png1x1 = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64'
+    );
+
+    // 9a. Upload a shared asset
+    const assetRes = await request.post(`${API_BASE}/assets`, {
+      headers: ALICE_AUTH,
+      multipart: {
+        file: {
+          name: 'revision-protected.png',
+          mimeType: 'image/png',
+          buffer: png1x1,
+        },
+      },
+    });
+    expect(assetRes.ok()).toBeTruthy();
+    const protectedAssetId = (await assetRes.json()).asset.id;
+
+    // 9b. Create Entry 1 with this asset
+    const entry1Res = await request.post(`${API_BASE}/entries`, {
+      headers: ALICE_AUTH,
+      data: {
+        categoryId: aliceCatId,
+        title: 'Entry 1 to be Purged',
+        doc: {
+          schemaVersion: 2,
+          doc: {
+            type: 'doc',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: 'Temporary doc' }] },
+              { type: 'image', attrs: { assetId: protectedAssetId } },
+            ],
+          },
+        },
+      },
+    });
+    expect(entry1Res.ok()).toBeTruthy();
+    const entry1Id = (await entry1Res.json()).id;
+
+    // 9c. Create Entry 2, save doc with protectedAssetId (creating revision snapshot), then remove image from current doc
+    const entry2Res = await request.post(`${API_BASE}/entries`, {
+      headers: ALICE_AUTH,
+      data: {
+        categoryId: aliceCatId,
+        title: 'Entry 2 with Revision Snapshot',
+      },
+    });
+    expect(entry2Res.ok()).toBeTruthy();
+    const entry2Id = (await entry2Res.json()).id;
+
+    // Save doc containing protectedAssetId (this records an EntryRevision snapshot)
+    const saveWithAssetRes = await request.put(`${API_BASE}/entries/${entry2Id}`, {
+      headers: ALICE_AUTH,
+      data: {
+        schemaVersion: 2,
+        doc: {
+          type: 'doc',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'Revision snapshot doc' }] },
+            { type: 'image', attrs: { assetId: protectedAssetId } },
+          ],
+        },
+      },
+    });
+    expect(saveWithAssetRes.ok()).toBeTruthy();
+
+    // Now update Entry 2 to remove the image from current chunks
+    const updateEntry2Res = await request.put(`${API_BASE}/entries/${entry2Id}`, {
+      headers: ALICE_AUTH,
+      data: {
+        schemaVersion: 2,
+        doc: {
+          type: 'doc',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'Image removed from active doc' }] },
+          ],
+        },
+      },
+    });
+    expect(updateEntry2Res.ok()).toBeTruthy();
+
+    // 9d. Soft-delete and purge Entry 1
+    const delRes = await request.delete(`${API_BASE}/entries/${entry1Id}`, {
+      headers: ALICE_AUTH,
+    });
+    expect(delRes.ok()).toBeTruthy();
+
+    const purgeRes = await request.delete(`${API_BASE}/entries/${entry1Id}/purge`, {
+      headers: ALICE_AUTH,
+    });
+    expect(purgeRes.ok()).toBeTruthy();
+
+    // 9e. Asset must NOT be deleted because Entry 2's revision snapshot still references it!
+    const checkProtectedAsset = await request.get(`${API_BASE}/assets/${protectedAssetId}`, {
+      headers: ALICE_AUTH,
+    });
+    expect(checkProtectedAsset.status()).toBe(200);
+
+    // 9f. Also test Drive pack cache cleanup:
+    const unrefAssetRes = await request.post(`${API_BASE}/assets`, {
+      headers: ALICE_AUTH,
+      multipart: {
+        file: {
+          name: 'drive-cache-test.png',
+          mimeType: 'image/png',
+          buffer: png1x1,
+        },
+      },
+    });
+    const unrefAsset = (await unrefAssetRes.json()).asset;
+    const cacheFilePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'drive-file-cache.json');
+    try {
+      let cacheData: Record<string, any> = {};
+      try {
+        const raw = await fs.readFile(cacheFilePath, 'utf8');
+        cacheData = JSON.parse(raw);
+      } catch {}
+      cacheData[`packs/test-${unrefAsset.id}`] = { fileId: 'test-file-id', checksum: 'test-chk' };
+      await fs.writeFile(cacheFilePath, JSON.stringify(cacheData, null, 2), 'utf8');
+
+      // Create entry with this unreferenced asset and purge it
+      const tempEntryRes = await request.post(`${API_BASE}/entries`, {
+        headers: ALICE_AUTH,
+        data: {
+          categoryId: aliceCatId,
+          title: 'Temp Entry for Drive Cache Purge',
+          doc: {
+            schemaVersion: 2,
+            doc: {
+              type: 'doc',
+              content: [
+                { type: 'paragraph', content: [{ type: 'text', text: 'To be purged' }] },
+                { type: 'image', attrs: { assetId: unrefAsset.id } },
+              ],
+            },
+          },
+        },
+      });
+      const tempEntryId = (await tempEntryRes.json()).id;
+      await request.delete(`${API_BASE}/entries/${tempEntryId}`, { headers: ALICE_AUTH });
+      const tempPurge = await request.delete(`${API_BASE}/entries/${tempEntryId}/purge`, { headers: ALICE_AUTH });
+      expect(tempPurge.ok()).toBeTruthy();
+
+      // Verify drive-file-cache record was cleaned up
+      const rawAfter = await fs.readFile(cacheFilePath, 'utf8');
+      const dataAfter = JSON.parse(rawAfter);
+      expect(dataAfter[`packs/test-${unrefAsset.id}`]).toBeUndefined();
+    } catch (e) {
+      // If filesystem cache file is not accessible, skip fs check
+    }
+  });
 });

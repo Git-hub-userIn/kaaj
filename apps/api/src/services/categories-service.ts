@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import type { BackupTarget } from '../backup/backup-target.js';
 import type {
   Category,
   CategoryLightRow,
@@ -63,6 +65,7 @@ export class CategoriesService {
   private seedCoversDir: string;
   private prisma: ScopedPrismaClient;
   private userId: string;
+  private backupTarget?: BackupTarget;
   private initialized = false;
 
   constructor(
@@ -70,13 +73,15 @@ export class CategoriesService {
     assetStore: LocalDiskAssetStore,
     seedCoversDir: string,
     prisma?: ScopedPrismaClient,
-    userId: string = 'dev-owner-user'
+    userId: string = 'dev-owner-user',
+    backupTarget?: BackupTarget
   ) {
     this.baseDataDir = baseDataDir;
     this.assetStore = assetStore;
     this.seedCoversDir = seedCoversDir;
     this.userId = userId;
     this.prisma = prisma || forUser(userId);
+    this.backupTarget = backupTarget;
   }
 
   forUser(userId: string): CategoriesService {
@@ -85,7 +90,8 @@ export class CategoriesService {
       this.assetStore,
       this.seedCoversDir,
       forUser(userId),
-      userId
+      userId,
+      this.backupTarget?.forUser ? this.backupTarget.forUser(userId) : this.backupTarget
     );
   }
 
@@ -848,6 +854,7 @@ export class CategoriesService {
           const record = await userStore.getRecord(assetId);
           if (record) {
             await userStore.delete(record.storageKey);
+            await this.removeDrivePackRefs(record.storageKey, assetId);
           }
         }
       }
@@ -856,6 +863,43 @@ export class CategoriesService {
       await fs.rm(entryVaultDir, { recursive: true, force: true }).catch(() => {});
     } catch (err) {
       console.warn('Failed to cleanup orphaned assets for entry:', entryId, err);
+    }
+  }
+
+  private async removeDrivePackRefs(storageKey: string, assetId: string): Promise<void> {
+    try {
+      // 1. Clean up from disk drive-file-cache records if present
+      const cacheFiles = [
+        path.resolve(this.baseDataDir, 'drive-file-cache.json'),
+        path.resolve(this.baseDataDir, 'vault', this.userId, 'drive-cache.json'),
+      ];
+
+      for (const cacheFile of cacheFiles) {
+        if (fsSync.existsSync(cacheFile)) {
+          try {
+            const raw = await fs.readFile(cacheFile, 'utf8');
+            const data: Record<string, any> = JSON.parse(raw);
+            let modified = false;
+            for (const key of Object.keys(data)) {
+              if (key.includes(assetId) || key.includes(storageKey)) {
+                delete data[key];
+                modified = true;
+              }
+            }
+            if (modified) {
+              await fs.writeFile(cacheFile, JSON.stringify(data, null, 2), 'utf8');
+            }
+          } catch {}
+        }
+      }
+
+      // 2. Remove remote Drive ref via backup target if supported
+      if (this.backupTarget?.delete) {
+        await this.backupTarget.delete(`assets/${storageKey}`).catch(() => {});
+        await this.backupTarget.delete(`vault/${this.userId}/${storageKey}`).catch(() => {});
+      }
+    } catch (err) {
+      console.warn('[Purge] Failed to clean up Drive pack refs:', err);
     }
   }
 
