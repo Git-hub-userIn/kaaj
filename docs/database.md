@@ -117,6 +117,7 @@ Every persistent entity attaches a `userId` foreign key referencing the `User` t
 6. **AssetMeta**: `userId` (FK -> User.id, indexed). Unique constraint on `(userId, id)`.
 7. **MaintenanceState**: `userId` (FK -> User.id, PK or indexed).
 8. **JobLease**: `userId` (FK -> User.id, composite PK `(userId, name)`).
+9. **EntryRevision**: `id` (PK, string), `userId` (FK -> User.id, indexed), `entryId` (FK -> Entry.id, indexed), `version` (Int), `title` (String), `manifest` (Json), `doc` (Json?), `createdAt` (DateTime). Unique constraint on `(entryId, version)`.
 
 ### 7.2 Data Migration and Backfill
 The migration creates the default user `dev-owner-user` (`email: dev@kaaj.local`).

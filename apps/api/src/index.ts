@@ -427,6 +427,45 @@ app.put('/entries/:id/chunks/:chunkId', async (c) => {
   }
 });
 
+// Revision History Endpoints (User-Scoped)
+app.get('/entries/:id/revisions', async (c) => {
+  const id = c.req.param('id');
+  const userId = getUserId(c);
+  const revisions = await categoriesService.forUser(userId).listRevisions(id);
+  if (!revisions) {
+    return c.json({ error: 'Entry not found' }, 404);
+  }
+  return c.json(revisions);
+});
+
+app.get('/entries/:id/revisions/:version', async (c) => {
+  const id = c.req.param('id');
+  const version = parseInt(c.req.param('version'), 10);
+  if (Number.isNaN(version)) {
+    return c.json({ error: 'Invalid version number' }, 400);
+  }
+  const userId = getUserId(c);
+  const revision = await categoriesService.forUser(userId).getRevision(id, version);
+  if (!revision) {
+    return c.json({ error: 'Revision not found' }, 404);
+  }
+  return c.json(revision);
+});
+
+app.post('/entries/:id/revisions/:version/restore', async (c) => {
+  const id = c.req.param('id');
+  const version = parseInt(c.req.param('version'), 10);
+  if (Number.isNaN(version)) {
+    return c.json({ error: 'Invalid version number' }, 400);
+  }
+  const userId = getUserId(c);
+  const result = await categoriesService.forUser(userId).restoreRevision(id, version);
+  if (!result) {
+    return c.json({ error: 'Failed to restore revision: entry or revision not found' }, 404);
+  }
+  return c.json(result);
+});
+
 app.post('/migrate', async (c) => {
   try {
     const res = await categoriesService.forUser(getUserId(c)).runMigration();

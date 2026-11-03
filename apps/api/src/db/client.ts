@@ -34,6 +34,7 @@ let currentPoolUrl: string | null = null;
 const USER_OWNED_MODELS = new Set([
   'Category',
   'Entry',
+  'EntryRevision',
   'EntryManifest',
   'Chunk',
   'AssetMeta',
@@ -162,7 +163,6 @@ function createScopedPrismaClient(userId: string, connectionString?: string) {
           ) {
             mutableArgs.where = { ...(mutableArgs.where || {}), userId };
           } else if (operation === 'upsert') {
-            mutableArgs.where = { ...(mutableArgs.where || {}), userId };
             mutableArgs.create = { ...(mutableArgs.create || {}), userId };
           }
 

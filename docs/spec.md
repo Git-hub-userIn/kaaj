@@ -408,3 +408,22 @@ kaaj/
 - Support direct keyboard navigation using `ArrowUp` and `ArrowDown`. Activate selection with `Enter`.
 - Close the palette on pressing `Escape` or clicking the backdrop.
 - Provide a "New Entry" shortcut inside the palette to create and open a new entry instantly.
+
+## 20. Revision History (LOCKED)
+
+### 20.1 Snapshot Model
+- Store immutable historical snapshots in the `EntryRevision` table.
+- Record snapshot on each major document save containing version, title, manifest, and document state.
+- Scope all revisions strictly to `userId`.
+
+### 20.2 Revision Endpoints
+- `GET /entries/:id/revisions`: List historical revisions for the entry, ordered newest to oldest.
+- `GET /entries/:id/revisions/:version`: Retrieve historical document preview for inspection.
+- `POST /entries/:id/revisions/:version/restore`: Restore the selected revision as the active head version.
+- Enforce user isolation. Reject cross-user revision inspection and restore requests with 404 or 403.
+
+### 20.3 Editor Revision History UI
+- Provide a "History" trigger button in the entry editor toolbar.
+- Open a slide-over revision drawer showing timestamped snapshots.
+- Allow users to select a snapshot to preview contents in read-only mode.
+- Provide a "Restore this revision" button to commit the restored version.

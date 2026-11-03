@@ -21,6 +21,7 @@ model User {
   assets           AssetMeta[]
   maintenanceState MaintenanceState[]
   leases           JobLease[]
+  revisions        EntryRevision[]
 }
 
 model Category {
@@ -67,6 +68,7 @@ model Entry {
   category      Category       @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   manifest      EntryManifest?
   chunks        Chunk[]
+  revisions     EntryRevision[]
 
   @@index([userId])
   @@index([categoryId])
@@ -160,4 +162,22 @@ model JobLease {
 
   @@id([userId, name])
   @@index([userId])
+}
+
+model EntryRevision {
+  id        String   @id @default(uuid())
+  userId    String   @default("dev-owner-user")
+  entryId   String
+  version   Int
+  title     String
+  manifest  Json
+  doc       Json?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entry     Entry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@unique([entryId, version])
+  @@index([userId])
+  @@index([entryId])
 }

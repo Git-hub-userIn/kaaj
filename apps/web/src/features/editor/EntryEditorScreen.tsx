@@ -51,7 +51,8 @@ import {
 import { ensureFontLoaded } from './font-loader.js';
 import { GlobalBackupStatus } from '../backup/GlobalBackupStatus.js';
 import { API_BASE_URL, AUTH_TOKEN, getAuthToken, getUserId, getWsUrl } from '../../config/api.js';
-import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff } from 'lucide-react';
+import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff, History } from 'lucide-react';
+import { RevisionHistoryDrawer } from './RevisionHistoryDrawer.js';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { IndexeddbPersistence } from 'y-indexeddb';
@@ -96,6 +97,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   // Custom context menu state
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [contextMenuCoords, setContextMenuCoords] = useState<{ x: number; y: number } | null>(null);
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchCoordsRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -895,6 +897,24 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
     };
   }, [entryId, editor, computeDocHash]);
 
+  const reloadEntry = useCallback(async () => {
+    try {
+      const [loaded, manifest] = await Promise.all([
+        loadEntryDocument(entryId),
+        loadEntryManifest(entryId).catch(() => null),
+      ]);
+      setEntry(loaded);
+      setTitle(loaded.title);
+      manifestRef.current = manifest;
+      lastSavedHashRef.current = computeDocHash(loaded.title, loaded.doc);
+      if (editor) {
+        editor.commands.setContent(loaded.doc.doc as any);
+      }
+    } catch (err) {
+      console.error('Failed to reload entry:', err);
+    }
+  }, [entryId, editor, computeDocHash]);
+
   // Remember scroll position across reloads
   useEffect(() => {
     const handleScroll = () => {
@@ -1192,6 +1212,31 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
             >
               <ImageIcon size={13} aria-hidden="true" />
               <span>Image</span>
+            </button>
+
+            {/* Revision History Button */}
+            <button
+              type="button"
+              data-testid="toolbar-history-btn"
+              onClick={() => setHistoryDrawerOpen(true)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                backgroundColor: 'transparent',
+                border: `1px solid ${COLOR_TOKENS.paperDark}`,
+                borderRadius: RADIUS_TOKENS.sm,
+                cursor: 'pointer',
+                color: COLOR_TOKENS.inkMuted,
+                fontSize: '13px',
+                padding: '4px 8px',
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                transition: 'all 0.15s ease',
+              }}
+              title="View revision history"
+            >
+              <History size={13} aria-hidden="true" />
+              <span>History</span>
             </button>
 
             {/* Quiet Save Status */}
@@ -1525,6 +1570,13 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
           )}
         </main>
       </div>
+
+      <RevisionHistoryDrawer
+        entryId={entryId}
+        isOpen={historyDrawerOpen}
+        onClose={() => setHistoryDrawerOpen(false)}
+        onRestored={reloadEntry}
+      />
     </div>
   );
 };

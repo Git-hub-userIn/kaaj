@@ -577,7 +577,7 @@ export class CategoriesService {
         spine: (spine as any) || undefined,
         stats: stats as any,
         weight,
-        version: 1,
+        version: 0,
         schemaVersion: 2,
         lastOpenedAt: new Date(),
       },
@@ -591,12 +591,24 @@ export class CategoriesService {
     await hotPathSaveChunkedEntry(this.prisma, {
       userId: this.userId,
       entryId,
-      expectedVersion: 1,
+      expectedVersion: 0,
       manifest,
       chunks,
       weight,
       stats,
     });
+
+    // Record immutable revision snapshot for v1
+    await this.prisma.entryRevision.create({
+      data: {
+        userId: this.userId,
+        entryId,
+        version: 1,
+        title: cleanTitle,
+        manifest: manifest as any,
+        doc: doc as any,
+      },
+    }).catch(() => {});
 
     return {
       id: entry.id,
@@ -710,6 +722,26 @@ export class CategoriesService {
       }
 
       const freshEntry = await this.getEntry(id);
+
+      // Record immutable revision snapshot
+      const existingRev = await this.prisma.entryRevision.findFirst({
+        where: { entryId: id, version: freshEntry!.version },
+      });
+      if (!existingRev) {
+        await this.prisma.entryRevision.create({
+          data: {
+            userId: this.userId,
+            entryId: id,
+            version: freshEntry!.version,
+            title: freshEntry!.title,
+            manifest: manifest as any,
+            doc: v2Doc as any,
+          },
+        }).catch((err) => {
+          console.error('Failed to create entry revision:', err);
+        });
+      }
+
       return { entry: freshEntry!, saved: true };
     } catch (err: any) {
       if (err instanceof ConcurrencyConflictError || err.statusCode === 409) {
@@ -755,5 +787,54 @@ export class CategoriesService {
       query,
       limit,
     });
+  }
+
+  async listRevisions(entryId: string) {
+    await this.init();
+    const entry = await this.prisma.entry.findFirst({
+      where: { id: entryId, deletedAt: null },
+    });
+    if (!entry) return null;
+
+    return await this.prisma.entryRevision.findMany({
+      where: { entryId },
+      orderBy: { version: 'desc' },
+      select: {
+        id: true,
+        entryId: true,
+        version: true,
+        title: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  async getRevision(entryId: string, version: number) {
+    await this.init();
+    const entry = await this.prisma.entry.findFirst({
+      where: { id: entryId, deletedAt: null },
+    });
+    if (!entry) return null;
+
+    const revision = await this.prisma.entryRevision.findFirst({
+      where: { entryId, version },
+    });
+    if (!revision) return null;
+
+    return revision;
+  }
+
+  async restoreRevision(entryId: string, version: number) {
+    await this.init();
+    const revision = await this.getRevision(entryId, version);
+    if (!revision || !revision.doc) return null;
+
+    const restored = await this.saveEntryDoc(
+      entryId,
+      revision.doc as any,
+      undefined,
+      revision.title
+    );
+    return restored;
   }
 }
