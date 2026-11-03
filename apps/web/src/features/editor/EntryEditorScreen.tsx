@@ -386,6 +386,9 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       connect: true,
     });
     providerRef.current = provider;
+    if (typeof window !== 'undefined') {
+      (window as any).__KAAJ_WS_PROVIDER__ = provider;
+    }
 
     provider.awareness.setLocalStateField('user', {
       name: currentUserId,
@@ -559,12 +562,28 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
       setSaveStatusText('Offline');
     };
 
+    const handleAuthReconnect = (event: any) => {
+      const code = event?.code;
+      if (code === 4401) {
+        // Auth token expired or rejected: refresh token and reconnect
+        const nextToken = getAuthToken().replace('Bearer ', '').trim();
+        (provider as any).params = { ...(provider as any).params, token: nextToken };
+        setTimeout(() => {
+          provider.connect();
+        }, 50);
+      }
+    };
+
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
 
     provider.on('status', onStatus);
+    provider.on('closed', handleAuthReconnect);
+    provider.on('connection-close', handleAuthReconnect);
     return () => {
       provider.off('status', onStatus);
+      provider.off('closed', handleAuthReconnect);
+      provider.off('connection-close', handleAuthReconnect);
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
     };

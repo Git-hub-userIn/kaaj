@@ -187,4 +187,46 @@ test.describe('Phase 2: WebSocket Sync & Collaboration Suite', () => {
     const manifest = await manifestRes.json();
     expect(manifest.chunks?.length).toBeGreaterThan(0);
   });
+
+  test('5. On WebSocket close 4401, client refreshes token and reconnects successfully', async ({ page }) => {
+    test.setTimeout(30000);
+    await page.goto(`${WEB_BASE}/entry/${entryId}`);
+    const editor = page.locator('.kaaj-editor-content');
+    await expect(editor).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="save-status-text"]')).toContainText('Saved', { timeout: 10000 });
+
+    const reconnectResult = await page.evaluate(async () => {
+      const provider = (window as any).__KAAJ_WS_PROVIDER__;
+      if (!provider) return { success: false, reason: 'No provider found on window' };
+
+      // Update auth token in localStorage to simulate token refresh
+      const refreshedToken = 'kaaj-local-dev-token';
+      window.localStorage.setItem('kaaj_auth_token', refreshedToken);
+
+      // Artificially close the active WebSocket with code 4401 (Unauthorized)
+      const currentWs = provider.ws;
+      if (currentWs) {
+        currentWs.close(4401, 'Unauthorized token refresh test');
+      }
+
+      // Wait for provider to reconnect with refreshed token
+      return new Promise<{ success: boolean; url?: string; reason?: string }>((resolve) => {
+        const timeout = setTimeout(() => {
+          resolve({ success: false, url: provider.url, reason: 'Timeout waiting for status connected' });
+        }, 10000);
+
+        provider.on('status', ({ status }: { status: string }) => {
+          if (status === 'connected') {
+            clearTimeout(timeout);
+            resolve({ success: true, url: provider.url });
+          }
+        });
+      });
+    });
+
+    console.log('reconnectResult:', reconnectResult);
+    expect(reconnectResult.success).toBe(true);
+    expect(reconnectResult.url).toContain('kaaj-local-dev-token');
+    await expect(page.locator('[data-testid="save-status-text"]')).toContainText('Saved', { timeout: 5000 });
+  });
 });
