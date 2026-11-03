@@ -158,4 +158,49 @@ test.describe('Phase 4F: Share Links Suite', () => {
     await closeBtn.click();
     await expect(shareModal).not.toBeVisible();
   });
+
+  test('enforces sliding-window per-IP rate limiting on public shared routes with 429 response', async ({
+    request,
+  }) => {
+    // 1. Create a share link for testing
+    const shareRes = await request.post(`${API_BASE}/entries/${aliceEntryId}/share`, {
+      headers: ALICE_AUTH,
+      data: { expiresInDays: 7 },
+    });
+    expect(shareRes.ok()).toBeTruthy();
+    const { token } = await shareRes.json();
+
+    const clientIp = '198.51.100.77';
+
+    // 2. Perform rapid requests under limit
+    for (let i = 0; i < 10; i++) {
+      const res = await request.get(`${API_BASE}/shared/${token}`, {
+        headers: {
+          'x-forwarded-for': clientIp,
+          'x-test-rate-limit': '10',
+        },
+      });
+      expect(res.status()).toBe(200);
+    }
+
+    // 3. 11th request from same IP exceeds rate limit -> returns 429
+    const rateLimitedRes = await request.get(`${API_BASE}/shared/${token}`, {
+      headers: {
+        'x-forwarded-for': clientIp,
+        'x-test-rate-limit': '10',
+      },
+    });
+    expect(rateLimitedRes.status()).toBe(429);
+    const body = await rateLimitedRes.json();
+    expect(body.error).toContain('Rate limit exceeded');
+
+    // 4. Request from a different IP is unaffected
+    const otherIpRes = await request.get(`${API_BASE}/shared/${token}`, {
+      headers: {
+        'x-forwarded-for': '198.51.100.88',
+        'x-test-rate-limit': '10',
+      },
+    });
+    expect(otherIpRes.status()).toBe(200);
+  });
 });

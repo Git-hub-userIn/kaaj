@@ -18,7 +18,7 @@ import { CategoriesService } from './services/categories-service.js';
 import { ImportExportService } from './services/import-export-service.js';
 import { WsSyncService } from './services/ws-sync-service.js';
 import { createBunWebSocket } from 'hono/bun';
-import { authGuard } from './auth/guard.js';
+import { authGuard, sharedIpRateLimitGuard } from './auth/guard.js';
 import { BackupService } from './backup/backup-service.js';
 import { LocalFolderBackupTarget } from './backup/local-backup-target.js';
 import { pruneBackups } from './backup/backup-prune.js';
@@ -35,6 +35,7 @@ import { checkPostgresReachable, closeDb, resolveDatabaseUrl, ensureUser } from 
 const app = new Hono();
 
 app.use('*', cors());
+app.use('/shared/*', sharedIpRateLimitGuard);
 app.use('*', authGuard);
 
 // Locate repository root reliably

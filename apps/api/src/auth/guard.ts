@@ -11,6 +11,40 @@ const DEV_TOKEN = process.env.DEV_AUTH_TOKEN || process.env.KAAJ_DEV_AUTH_TOKEN 
 // In-memory per-user sliding window rate limiter
 const userRateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
+// In-memory per-IP sliding window rate limiter for public routes (/shared/*)
+const sharedIpRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+export function checkSharedIpRateLimit(
+  ip: string,
+  limit?: number,
+  windowMs = 60000
+): { allowed: boolean; remaining: number } {
+  const actualLimit =
+    limit ?? ((process.env.NODE_ENV !== 'production' && process.env.APP_MODE === 'test') ? 50 : 60);
+  const now = Date.now();
+  let entry = sharedIpRateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 0, resetAt: now + windowMs };
+    sharedIpRateLimitMap.set(ip, entry);
+  }
+  entry.count++;
+  if (entry.count > actualLimit) {
+    return { allowed: false, remaining: 0 };
+  }
+  return { allowed: true, remaining: actualLimit - entry.count };
+}
+
+export async function sharedIpRateLimitGuard(c: Context, next: Next): Promise<Response | void> {
+  const ip = c.req.header('x-forwarded-for')?.split(',')[0].trim() || c.req.header('x-real-ip') || '127.0.0.1';
+  const customLimitHeader = c.req.header('x-test-rate-limit');
+  const customLimit = customLimitHeader ? Number(customLimitHeader) : undefined;
+  const rate = checkSharedIpRateLimit(ip, customLimit);
+  if (!rate.allowed) {
+    return c.json({ error: 'Rate limit exceeded for shared link access. Please retry later.' }, 429);
+  }
+  return await next();
+}
+
 export function checkRateLimit(
   userId: string,
   limit = (process.env.NODE_ENV !== 'production' && process.env.APP_MODE === 'test') ? 50000 : 300,
