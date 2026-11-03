@@ -780,6 +780,59 @@ export class CategoriesService {
     return await this.getEntry(id);
   }
 
+  async listTrash() {
+    await this.init();
+    const entries = await this.prisma.entry.findMany({
+      where: { deletedAt: { not: null } },
+      orderBy: { deletedAt: 'desc' },
+      select: {
+        id: true,
+        categoryId: true,
+        title: true,
+        color: true,
+        pinned: true,
+        weight: true,
+        version: true,
+        deletedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    return entries.map((e) => ({
+      ...e,
+      deletedAt: e.deletedAt ? e.deletedAt.toISOString() : null,
+      createdAt: e.createdAt.toISOString(),
+      updatedAt: e.updatedAt.toISOString(),
+    }));
+  }
+
+  async purgeEntry(id: string): Promise<boolean> {
+    await this.init();
+    const entry = await this.prisma.entry.findFirst({
+      where: { id, deletedAt: { not: null } },
+    });
+    if (!entry) return false;
+
+    await this.prisma.entry.delete({
+      where: { id },
+    });
+    return true;
+  }
+
+  async purgeTrash(olderThanDays = 30, purgeAll = false): Promise<number> {
+    await this.init();
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
+    const whereClause = purgeAll
+      ? { deletedAt: { not: null } }
+      : { deletedAt: { lte: cutoff } };
+
+    const res = await this.prisma.entry.deleteMany({
+      where: whereClause,
+    });
+    return res.count;
+  }
+
   async searchEntries(query: string, limit = 20) {
     await this.init();
     return await hotPathSearchEntries(this.prisma, {

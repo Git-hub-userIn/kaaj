@@ -289,6 +289,29 @@ app.post('/entries/:id/restore', async (c) => {
   return c.json({ success: true, entry: restored });
 });
 
+app.delete('/entries/:id/purge', async (c) => {
+  const id = c.req.param('id');
+  const purged = await categoriesService.forUser(getUserId(c)).purgeEntry(id);
+  if (!purged) {
+    return c.json({ error: 'Entry not found or not in trash' }, 404);
+  }
+  return c.json({ success: true, id });
+});
+
+app.get('/trash', async (c) => {
+  const userId = getUserId(c);
+  const items = await categoriesService.forUser(userId).listTrash();
+  return c.json(items);
+});
+
+app.post('/trash/purge', async (c) => {
+  const userId = getUserId(c);
+  const purgeAll = c.req.query('all') === 'true';
+  const days = parseInt(c.req.query('days') || '30', 10);
+  const count = await categoriesService.forUser(userId).purgeTrash(Number.isNaN(days) ? 30 : days, purgeAll);
+  return c.json({ success: true, purgedCount: count });
+});
+
 app.put('/entries/:id', async (c) => {
   const id = c.req.param('id');
   const ifMatch = c.req.header('if-match');

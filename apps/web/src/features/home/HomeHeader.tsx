@@ -1,9 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { COLOR_TOKENS, TYPOGRAPHY_TOKENS, SPACING_TOKENS, RADIUS_TOKENS, CURRENT_USER } from '@kaaj/design';
-import { Search } from 'lucide-react';
+import { Search, Trash2 } from 'lucide-react';
 import { GlobalBackupStatus } from '../backup/GlobalBackupStatus';
+import { TrashModal } from '../trash/TrashModal.js';
 
 export const HomeHeader: React.FC = () => {
+  const [trashOpen, setTrashOpen] = useState(false);
+
   const triggerPalette = () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
   };
@@ -99,6 +102,30 @@ export const HomeHeader: React.FC = () => {
           </kbd>
         </button>
 
+        {/* Trash View Button */}
+        <button
+          type="button"
+          data-testid="open-trash-btn"
+          onClick={() => setTrashOpen(true)}
+          aria-label="View Trash"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '6px 12px',
+            backgroundColor: COLOR_TOKENS.paperWarm,
+            border: `1px solid ${COLOR_TOKENS.border}`,
+            borderRadius: RADIUS_TOKENS.sm,
+            color: COLOR_TOKENS.inkMuted,
+            fontSize: '13px',
+            fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+            cursor: 'pointer',
+          }}
+        >
+          <Trash2 size={14} aria-hidden="true" />
+          <span>Trash</span>
+        </button>
+
         <GlobalBackupStatus />
 
         <div
@@ -128,6 +155,11 @@ export const HomeHeader: React.FC = () => {
           {CURRENT_USER.initials}
         </div>
       </div>
+
+      <TrashModal
+        isOpen={trashOpen}
+        onClose={() => setTrashOpen(false)}
+      />
     </header>
   );
 };

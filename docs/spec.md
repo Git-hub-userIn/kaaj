@@ -427,3 +427,24 @@ kaaj/
 - Open a slide-over revision drawer showing timestamped snapshots.
 - Allow users to select a snapshot to preview contents in read-only mode.
 - Provide a "Restore this revision" button to commit the restored version.
+
+## 21. Trash & Soft-Delete Lifecycle (LOCKED)
+
+### 21.1 Soft-Delete Window
+- Mark deleted entries by setting `deletedAt` timestamp.
+- Retain soft-deleted entries for 30 days before automatic purge.
+- Exclude soft-deleted entries from standard category listings and search queries.
+
+### 21.2 Trash Endpoints
+- `GET /trash`: List soft-deleted entries for the authenticated user with deletion timestamps.
+- `POST /entries/:id/restore`: Restore a soft-deleted entry back to its parent category.
+- `DELETE /entries/:id/purge`: Permanently purge a single soft-deleted entry and its chunks.
+- `POST /trash/purge`: Purge entries older than 30 days or all trash when `all=true` is set.
+- Enforce user isolation. Reject cross-user trash operations with status 404 or 403.
+
+### 21.3 Trash Management UI
+- Provide a Trash view accessible from the home screen navigation header.
+- Display all soft-deleted entries with deleted dates and category indicators.
+- Provide "Restore" buttons for individual entries to restore them immediately.
+- Provide a "Delete Permanently" button per item and an "Empty Trash" bulk action.
+- Show confirmation dialog before permanent deletion.

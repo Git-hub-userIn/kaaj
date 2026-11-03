@@ -146,3 +146,16 @@ Raw SQL statements in `apps/api/src/db/hot-paths.ts` require an explicit `userId
 - `hotPathSaveChunkedEntry(prisma, { userId, entryId, ... })`: Verifies entry ownership with `WHERE id = $1 AND userId = $2 FOR UPDATE`. Writes chunks and manifest with `userId`.
 - `JobLeaseManager`: Scopes leases by `userId` and `leaseName`.
 - `queryRowForUpdate(prisma, tableName, id, userId)`: Adds `WHERE id = $1 AND userId = $2 FOR UPDATE`.
+
+---
+
+## 9. Soft-Delete and Trash Lifecycle Architecture
+
+### 9.1 Deletion Semantics
+1. **Soft Deletion**: Calling delete on an entry sets `deletedAt = NOW()`.
+2. **Filtering**: Active queries filter with `WHERE "deletedAt" IS NULL`.
+3. **Trash Retention**: Soft-deleted entries remain in trash for a 30-day retention window.
+4. **Permanent Purge**: Purging an entry deletes chunks, manifest, and revision snapshots with cascade deletion:
+   - Foreign key constraints on `Entry.id` declare `ON DELETE CASCADE` for `Chunk`, `EntryManifest`, and `EntryRevision`.
+   - Deleting the `Entry` row permanently purges all associated chunks and revisions in a single transaction.
+5. **Scoped Purge**: All purge queries strictly filter by `userId` to enforce isolation.
