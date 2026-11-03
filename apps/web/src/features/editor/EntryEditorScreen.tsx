@@ -51,7 +51,7 @@ import {
 import { ensureFontLoaded } from './font-loader.js';
 import { GlobalBackupStatus } from '../backup/GlobalBackupStatus.js';
 import { API_BASE_URL, AUTH_TOKEN, getAuthToken, getUserId, getWsUrl, getAuthHeaders } from '../../config/api.js';
-import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff, History, ListTree, Link2, Tag, Share2 } from 'lucide-react';
+import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff, History, ListTree, Link2, Tag, Share2, Maximize2, Minimize2 } from 'lucide-react';
 import { RevisionHistoryDrawer } from './RevisionHistoryDrawer.js';
 import { OutlineSidebar } from './OutlineSidebar.js';
 import { BacklinksDrawer } from './BacklinksDrawer.js';
@@ -111,6 +111,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
   const [tags, setTags] = useState<{ id: string; name: string }[]>([]);
   const [newTagInput, setNewTagInput] = useState('');
   const [tagInputVisible, setTagInputVisible] = useState(false);
@@ -1105,6 +1106,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   return (
     <div
       data-testid="entry-editor-screen"
+      data-focus-mode={focusMode ? 'true' : 'false'}
       onContextMenu={handleContextMenu}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
@@ -1453,6 +1455,52 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
               <Share2 size={13} aria-hidden="true" />
               <span>Share</span>
             </button>
+
+            {/* Focus Mode Button */}
+            <button
+              type="button"
+              data-testid="toolbar-focus-btn"
+              onClick={() => setFocusMode(!focusMode)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                backgroundColor: focusMode ? COLOR_TOKENS.paperDark : 'transparent',
+                border: `1px solid ${COLOR_TOKENS.paperDark}`,
+                borderRadius: RADIUS_TOKENS.sm,
+                cursor: 'pointer',
+                color: focusMode ? COLOR_TOKENS.ink : COLOR_TOKENS.inkMuted,
+                fontSize: '13px',
+                padding: '4px 8px',
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                transition: 'all 0.15s ease',
+              }}
+              title="Toggle focus mode"
+            >
+              {focusMode ? <Minimize2 size={13} aria-hidden="true" /> : <Maximize2 size={13} aria-hidden="true" />}
+              <span>{focusMode ? 'Exit' : 'Focus'}</span>
+            </button>
+
+            {/* Word Count and Reading Time Badge */}
+            <div
+              data-testid="word-count-badge"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                color: COLOR_TOKENS.inkMuted,
+                fontSize: '12px',
+                fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+                padding: '4px 8px',
+              }}
+            >
+              {(() => {
+                const text = editor?.getText() || '';
+                const words = text.trim() ? text.trim().split(/\s+/).filter(Boolean).length : 0;
+                const readMins = Math.max(1, Math.ceil(words / 200));
+                return `${words} ${words === 1 ? 'word' : 'words'} · ${readMins} min read`;
+              })()}
+            </div>
 
             {/* Quiet Save Status */}
             <button
@@ -1857,7 +1905,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
               onInsertImage={() => fileInputRef.current?.click()}
             />
           )}
-          <EditorContent editor={editor} />
+          <EditorContent editor={editor} data-testid="tiptap-editor" />
 
           {/* Upload Error Banner / Toast */}
           {uploadError && (
@@ -1921,6 +1969,32 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         isOpen={shareModalOpen}
         onClose={() => setShareModalOpen(false)}
       />
+
+      {focusMode && (
+        <button
+          type="button"
+          data-testid="exit-focus-btn"
+          onClick={() => setFocusMode(false)}
+          aria-label="Exit Focus Mode"
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            padding: '8px 16px',
+            backgroundColor: COLOR_TOKENS.ink,
+            color: COLOR_TOKENS.paper,
+            borderRadius: RADIUS_TOKENS.full,
+            fontSize: '13px',
+            fontWeight: 500,
+            border: 'none',
+            cursor: 'pointer',
+            boxShadow: SHADOW_TOKENS.toast,
+            zIndex: 1000,
+          }}
+        >
+          Exit Focus Mode
+        </button>
+      )}
     </div>
   );
 };

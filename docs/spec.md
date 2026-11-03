@@ -512,5 +512,31 @@ kaaj/
 - Frontmatter preserves title, tags, creation date, and metadata.
 - Body parser converts markdown syntax (headings, task lists, code blocks, wikilinks) into Kaaj blocks.
 
+## 26. Enhanced User Experience Features (LOCKED)
+
+### 26.1 Dark Theme
+- Provide full dark mode palette using dark paper, muted canvas, and high-contrast ink tokens.
+- Allow users to toggle theme with `[data-testid="theme-toggle-btn"]`.
+- Persist theme choice in local storage.
+
+### 26.2 Focus and Typewriter Mode
+- Dim distracting interface elements during active writing sessions.
+- Center active cursor position vertically within the editor viewport.
+- Toggle focus mode using `[data-testid="toolbar-focus-btn"]` or keyboard shortcuts.
+
+### 26.3 Word Count and Reading Time
+- Calculate real-time word count, character count, and estimated reading time.
+- Display live metrics in `[data-testid="word-count-badge"]`.
+
+### 26.4 Daily Journal Template
+- Create pre-structured daily journal entries with one click.
+- Seed entry with date header, intentions, tasks, and reflection sections.
+
+### 26.5 On This Day Historical Recall
+- Query past journal entries created on the current calendar date across previous years.
+- Expose `GET /entries/on-this-day` scoped strictly by `userId`.
+- Present historical entries in `[data-testid="on-this-day-widget"]`.
+
+
 
 

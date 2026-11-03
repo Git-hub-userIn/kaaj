@@ -1,14 +1,48 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { COLOR_TOKENS, TYPOGRAPHY_TOKENS, SPACING_TOKENS, RADIUS_TOKENS, CURRENT_USER } from '@kaaj/design';
-import { Search, Trash2 } from 'lucide-react';
+import { Search, Trash2, Sun, Moon, BookOpen } from 'lucide-react';
 import { GlobalBackupStatus } from '../backup/GlobalBackupStatus';
 import { TrashModal } from '../trash/TrashModal.js';
+import { API_BASE_URL, getAuthHeaders } from '../../config/api.js';
 
 export const HomeHeader: React.FC = () => {
   const [trashOpen, setTrashOpen] = useState(false);
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      document.documentElement.classList.contains('dark') ||
+      localStorage.getItem('kaaj_theme') === 'dark'
+    );
+  });
+
+  useEffect(() => {
+    if (isDark) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('kaaj_theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('kaaj_theme', 'light');
+    }
+  }, [isDark]);
 
   const triggerPalette = () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+  };
+
+  const handleDailyJournal = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/entries/daily-template`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        window.history.pushState({}, '', `/entry/${data.id}`);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      }
+    } catch (err) {
+      console.error('Failed to create daily journal:', err);
+    }
   };
 
   return (
@@ -124,6 +158,52 @@ export const HomeHeader: React.FC = () => {
         >
           <Trash2 size={14} aria-hidden="true" />
           <span>Trash</span>
+        </button>
+
+        {/* Daily Journal Button */}
+        <button
+          type="button"
+          data-testid="daily-journal-btn"
+          onClick={handleDailyJournal}
+          aria-label="New Daily Journal Entry"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '6px 12px',
+            backgroundColor: COLOR_TOKENS.paperWarm,
+            border: `1px solid ${COLOR_TOKENS.border}`,
+            borderRadius: RADIUS_TOKENS.sm,
+            color: COLOR_TOKENS.ink,
+            fontSize: '13px',
+            fontFamily: TYPOGRAPHY_TOKENS.fontFamilySans,
+            cursor: 'pointer',
+            fontWeight: 500,
+          }}
+        >
+          <BookOpen size={14} aria-hidden="true" color={COLOR_TOKENS.terracotta} />
+          <span>Journal</span>
+        </button>
+
+        {/* Theme Toggle Button */}
+        <button
+          type="button"
+          data-testid="theme-toggle-btn"
+          onClick={() => setIsDark((prev) => !prev)}
+          aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '6px',
+            backgroundColor: COLOR_TOKENS.paperWarm,
+            border: `1px solid ${COLOR_TOKENS.border}`,
+            borderRadius: RADIUS_TOKENS.sm,
+            color: COLOR_TOKENS.inkMuted,
+            cursor: 'pointer',
+          }}
+        >
+          {isDark ? <Sun size={15} aria-hidden="true" /> : <Moon size={15} aria-hidden="true" />}
         </button>
 
         <GlobalBackupStatus />

@@ -206,6 +206,27 @@ app.post('/categories/:id/restore', async (c) => {
   return c.json(restored);
 });
 
+// Historical On This Day query (User-Scoped)
+app.get('/entries/on-this-day', async (c) => {
+  const entries = await categoriesService.forUser(getUserId(c)).getEntriesOnThisDay();
+  return c.json(entries);
+});
+
+// Daily Journal Template creation (User-Scoped)
+app.post('/entries/daily-template', async (c) => {
+  try {
+    let categoryId: string | undefined;
+    const body = await c.req.json().catch(() => ({}));
+    if (body && typeof body.categoryId === 'string') {
+      categoryId = body.categoryId;
+    }
+    const created = await categoriesService.forUser(getUserId(c)).createDailyJournalEntry(categoryId);
+    return c.json(created, 201);
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Failed to create daily journal' }, 422);
+  }
+});
+
 // Entry Endpoints (per spec 8.1 & Category Stack screen)
 app.get('/entries/:id', async (c) => {
   const id = c.req.param('id');

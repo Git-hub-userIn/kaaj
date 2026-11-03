@@ -18,7 +18,45 @@
         -webkit-font-smoothing: antialiased;
         overflow-x: hidden;
       }
+      html.dark body {
+        background-color: #18181b;
+        color: #f4f4f5;
+      }
+      html.dark [data-testid="home-screen"] {
+        background-color: #121214 !important;
+        background-image: none !important;
+        color: #f4f4f5 !important;
+      }
+      html.dark [data-testid="editor-screen"] {
+        background-color: #18181b !important;
+        color: #f4f4f5 !important;
+      }
+      html.dark [data-testid="editor-content-area"] {
+        background-color: #27272a !important;
+        border-color: #3f3f46 !important;
+        color: #f4f4f5 !important;
+      }
+      html.dark [data-testid="tiptap-editor"] {
+        color: #f4f4f5 !important;
+      }
+      html.dark [data-testid="entry-title-input"] {
+        color: #f4f4f5 !important;
+      }
+      /* Focus Mode styles */
+      [data-focus-mode="true"] header {
+        display: none !important;
+      }
+      [data-focus-mode="true"] [data-testid="tags-bar"] {
+        display: none !important;
+      }
     </style>
+    <script>
+      try {
+        if (localStorage.getItem('kaaj_theme') === 'dark') {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

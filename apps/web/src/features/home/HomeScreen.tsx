@@ -4,6 +4,7 @@ import { COLOR_TOKENS, SPACING_TOKENS, COPY } from '@kaaj/design';
 import { HomeHeader } from './HomeHeader.js';
 import { CategoryCollage } from './CategoryCollage.js';
 import { UndoToast } from './UndoToast.js';
+import { OnThisDayWidget } from './OnThisDayWidget.js';
 import { API_BASE_URL, AUTH_TOKEN } from '../../config/api.js';
 
 interface HomeScreenProps {
@@ -166,13 +167,16 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
             {error}
           </div>
         ) : (
-          <CategoryCollage
+          <>
+            <OnThisDayWidget />
+            <CategoryCollage
             categories={categories}
             onNavigate={onNavigateToCategory}
             onDelete={handleDeleteCategory}
             onRename={handleRenameCategory}
             onAdd={handleAddCategory}
           />
+          </>
         )}
       </main>
 

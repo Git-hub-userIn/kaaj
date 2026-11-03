@@ -1176,4 +1176,107 @@ export class CategoriesService {
       updatedAt: link.entry.updatedAt.toISOString(),
     };
   }
+
+  async getEntriesOnThisDay(
+    referenceDate?: Date
+  ): Promise<{ id: string; title: string; categoryId: string; createdAt: string; updatedAt: string }[]> {
+    await this.init();
+    const target = referenceDate || new Date();
+    const month = target.getMonth() + 1;
+    const day = target.getDate();
+
+    const rows: any[] = await this.prisma.$queryRaw`
+      SELECT id, title, "categoryId", "createdAt", "updatedAt"
+      FROM "Entry"
+      WHERE "userId" = ${this.userId}
+        AND "deletedAt" IS NULL
+        AND EXTRACT(MONTH FROM "createdAt") = ${month}
+        AND EXTRACT(DAY FROM "createdAt") = ${day}
+      ORDER BY "createdAt" DESC
+      LIMIT 50
+    `;
+
+    return rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      categoryId: r.categoryId,
+      createdAt: new Date(r.createdAt).toISOString(),
+      updatedAt: new Date(r.updatedAt).toISOString(),
+    }));
+  }
+
+  async createDailyJournalEntry(categoryId?: string): Promise<{ id: string; title: string }> {
+    await this.init();
+    let targetCatId = categoryId;
+    if (!targetCatId) {
+      const cats = await this.listCategories();
+      targetCatId = cats[0]?.id;
+      if (!targetCatId) {
+        const created = await this.createCategory('Journal');
+        targetCatId = created.id;
+      }
+    }
+
+    const todayStr = new Date().toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+    const title = `Daily Journal — ${todayStr}`;
+    const initialDoc: DocumentEnvelopeV2 = {
+      schemaVersion: 2,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'heading',
+            attrs: { level: 2, id: null, textAlign: 'left' },
+            content: [{ type: 'text', text: 'Morning Intentions' }],
+          },
+          {
+            type: 'paragraph',
+            attrs: { id: null, textAlign: 'left' },
+            content: [{ type: 'text', text: 'What is my main focus for today?' }],
+          },
+          {
+            type: 'heading',
+            attrs: { level: 2, id: null, textAlign: 'left' },
+            content: [{ type: 'text', text: 'Daily Priorities' }],
+          },
+          {
+            type: 'taskList',
+            attrs: { id: null },
+            content: [
+              {
+                type: 'taskItem',
+                attrs: { checked: false, id: null },
+                content: [
+                  {
+                    type: 'paragraph',
+                    attrs: { id: null, textAlign: 'left' },
+                    content: [{ type: 'text', text: 'Top priority task' }],
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            type: 'heading',
+            attrs: { level: 2, id: null, textAlign: 'left' },
+            content: [{ type: 'text', text: 'Evening Reflection' }],
+          },
+          {
+            type: 'paragraph',
+            attrs: { id: null, textAlign: 'left' },
+            content: [{ type: 'text', text: 'What went well today? What did I learn?' }],
+          },
+        ],
+      },
+    };
+
+    const created = await this.createEntry(targetCatId, title, undefined, false, undefined, initialDoc as any);
+    return { id: created.id, title: created.title };
+  }
 }
