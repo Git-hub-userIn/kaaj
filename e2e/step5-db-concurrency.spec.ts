@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getPrismaClient } from '../apps/api/src/db/client.js';
+import { forUser } from '../apps/api/src/db/client.js';
 import { JobLeaseManager, hotPathSaveChunkedEntry } from '../apps/api/src/db/hot-paths.js';
 import {
   canonicalDocJson,
@@ -15,6 +15,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
+const AUTH_HEADER = { Authorization: 'Bearer kaaj-local-dev-token' };
 
 test.describe('Step 5: Database Concurrency, Lease, Failure, and Performance', () => {
   test('Test mode shows visible TEST badge in Web UI', async ({ page }) => {
@@ -26,19 +27,19 @@ test.describe('Step 5: Database Concurrency, Lease, Failure, and Performance', (
 
   test('Concurrent save conflict: second client receives 409 and does not overwrite', async ({ request }) => {
     // 1. Fetch all categories and pick the first entry
-    const catsRes = await request.get('http://localhost:3001/categories');
+    const catsRes = await request.get('http://localhost:3001/categories', { headers: AUTH_HEADER });
     expect(catsRes.ok()).toBe(true);
     const categories = await catsRes.json();
     expect(categories.length).toBeGreaterThan(0);
 
     const firstCat = categories[0];
-    const entriesRes = await request.get(`http://localhost:3001/categories/${firstCat.id}/entries`);
+    const entriesRes = await request.get(`http://localhost:3001/categories/${firstCat.id}/entries`, { headers: AUTH_HEADER });
     expect(entriesRes.ok()).toBe(true);
     const entries = await entriesRes.json();
     expect(entries.length).toBeGreaterThan(0);
 
     const targetEntry = entries[0];
-    const fullEntryRes = await request.get(`http://localhost:3001/entries/${targetEntry.id}`);
+    const fullEntryRes = await request.get(`http://localhost:3001/entries/${targetEntry.id}`, { headers: AUTH_HEADER });
     expect(fullEntryRes.ok()).toBe(true);
     const fullEntry = await fullEntryRes.json();
     const initialVersion = fullEntry.version || 1;
@@ -46,6 +47,7 @@ test.describe('Step 5: Database Concurrency, Lease, Failure, and Performance', (
     // 2. Client A updates entry title with version = initialVersion
     const clientARes = await request.put(`http://localhost:3001/entries/${targetEntry.id}`, {
       headers: {
+        ...AUTH_HEADER,
         'If-Match': `"${initialVersion}"`,
       },
       data: {
@@ -61,6 +63,7 @@ test.describe('Step 5: Database Concurrency, Lease, Failure, and Performance', (
     // 3. Client B attempts update with stale version = initialVersion
     const clientBRes = await request.put(`http://localhost:3001/entries/${targetEntry.id}`, {
       headers: {
+        ...AUTH_HEADER,
         'If-Match': `"${initialVersion}"`,
       },
       data: {
@@ -72,14 +75,14 @@ test.describe('Step 5: Database Concurrency, Lease, Failure, and Performance', (
     expect(clientBRes.status()).toBe(409);
 
     // 4. Verify entry still retains Client A's title
-    const verifyRes = await request.get(`http://localhost:3001/entries/${targetEntry.id}`);
+    const verifyRes = await request.get(`http://localhost:3001/entries/${targetEntry.id}`, { headers: AUTH_HEADER });
     expect(verifyRes.ok()).toBe(true);
     const finalEntry = await verifyRes.json();
     expect(finalEntry.title).toBe('Title Updated by Client A');
   });
 
   test('Crash mid-save: transaction rollback maintains atomicity and valid state', async () => {
-    const prisma = getPrismaClient();
+    const prisma = forUser('dev-owner-user');
 
     // Create a dedicated entry for this transaction test
     const cat = await prisma.category.findFirst();
@@ -106,6 +109,7 @@ test.describe('Step 5: Database Concurrency, Lease, Failure, and Performance', (
 
     const { manifest: m1, chunks: c1 } = splitBlocksIntoChunks(initialBlocks, { entryId, version: 1 });
     await hotPathSaveChunkedEntry(prisma, {
+      userId: 'dev-owner-user',
       entryId,
       expectedVersion: 1,
       manifest: m1,
@@ -152,10 +156,10 @@ test.describe('Step 5: Database Concurrency, Lease, Failure, and Performance', (
   });
 
   test('Cooperative Job Lease: mutual exclusion, heartbeat, expiration handover, and fencing token', async () => {
-    const prisma = getPrismaClient();
+    const prisma = forUser('dev-owner-user');
     const leaseName = `test_lease_${Date.now()}`;
-    const leaseA = new JobLeaseManager(prisma, leaseName);
-    const leaseB = new JobLeaseManager(prisma, leaseName);
+    const leaseA = new JobLeaseManager(prisma, 'dev-owner-user', leaseName);
+    const leaseB = new JobLeaseManager(prisma, 'dev-owner-user', leaseName);
 
     // 1. Worker A acquires lease
     const tokenA = await leaseA.acquire('worker-A', 2000); // 2 second TTL
@@ -190,7 +194,7 @@ test.describe('Step 5: Database Concurrency, Lease, Failure, and Performance', (
   });
 
   test('Canonical JSON integrity: loaded and reassembled entry equals original canonical JSON', async () => {
-    const prisma = getPrismaClient();
+    const prisma = forUser('dev-owner-user');
     const entry = await prisma.entry.findFirst({
       where: { deletedAt: null },
       include: {
