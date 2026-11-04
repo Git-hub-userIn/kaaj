@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Share2, Copy, Check, Trash2, Globe, Clock } from 'lucide-react';
 import { COLOR_TOKENS, SHADOW_TOKENS, RADIUS_TOKENS, TYPOGRAPHY_TOKENS } from '@kaaj/design';
-import { API_BASE_URL, getAuthHeaders } from '../../config/api.js';
+import { API_BASE_URL, getAuthHeaders , apiFetch } from '../../config/api.js';
 
 export interface ShareLinkItem {
   id: string;
@@ -27,7 +27,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ entryId, isOpen, onClose
     if (!entryId) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/share`, {
+      const res = await apiFetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/share`, {
         headers: getAuthHeaders(),
       });
       if (res.ok) {
@@ -60,7 +60,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ entryId, isOpen, onClose
   const handleCreateLink = async (expiresInDays?: number) => {
     setCreating(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/share`, {
+      const res = await apiFetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/share`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify(expiresInDays ? { expiresInDays } : {}),
@@ -78,7 +78,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ entryId, isOpen, onClose
 
   const handleRevokeLink = async (linkId: string) => {
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/share/${encodeURIComponent(linkId)}`,
         {
           method: 'DELETE',

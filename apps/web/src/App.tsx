@@ -14,7 +14,10 @@ import '@fontsource/playfair-display/700.css';
 import { HomeScreen } from './features/home/HomeScreen.js';
 import { CategoryStackScreen } from './features/category/CategoryStackScreen.js';
 import { CommandPalette } from './features/search/CommandPalette.js';
-import { API_BASE_URL, getAuthHeaders } from './config/api.js';
+import { API_BASE_URL, getAuthHeaders, apiFetch } from './config/api.js';
+import { AuthProvider } from './features/auth/AuthContext.js';
+import { ProtectedRoute } from './features/auth/ProtectedRoute.js';
+import { LoginPage } from './features/auth/LoginPage.js';
 
 // Code-split entry editor so home and catalogue stack screens stay light
 const LazyEntryEditor = React.lazy(() =>
@@ -25,10 +28,12 @@ export const App: React.FC = () => {
   const [currentPath, setCurrentPath] = useState<string>(() => window.location.pathname);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const isTestMode = (import.meta.env as any).APP_MODE === 'test';
+  const isLoginPage = currentPath === '/login';
 
   // Global Cmd+K / Ctrl+K keyboard shortcut
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isLoginPage) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setPaletteOpen((prev) => !prev);
@@ -36,11 +41,13 @@ export const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isLoginPage]);
 
   const handleCreateNewEntry = async () => {
     try {
-      const catRes = await fetch(`${API_BASE_URL}/categories`, { headers: getAuthHeaders() });
+      const catRes = await apiFetch(`${API_BASE_URL}/categories`, {
+        headers: getAuthHeaders(),
+      });
       let categoryId = 'cat_ideas';
       if (catRes.ok) {
         const cats = await catRes.json();
@@ -49,7 +56,7 @@ export const App: React.FC = () => {
         }
       }
 
-      const res = await fetch(`${API_BASE_URL}/entries`, {
+      const res = await apiFetch(`${API_BASE_URL}/entries`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -85,16 +92,23 @@ export const App: React.FC = () => {
   };
 
   const renderContent = () => {
+    // Route: /login
+    if (currentPath === '/login') {
+      return <LoginPage />;
+    }
+
     // Route: /category/:id
     const categoryMatch = currentPath.match(/^\/category\/([^/]+)/);
     if (categoryMatch) {
       const categoryId = categoryMatch[1];
       return (
-        <CategoryStackScreen
-          categoryId={categoryId}
-          onNavigateHome={() => navigate('/')}
-          onNavigateToEntry={(entryId) => navigate(`/entry/${entryId}`)}
-        />
+        <ProtectedRoute>
+          <CategoryStackScreen
+            categoryId={categoryId}
+            onNavigateHome={() => navigate('/')}
+            onNavigateToEntry={(entryId) => navigate(`/entry/${entryId}`)}
+          />
+        </ProtectedRoute>
       );
     }
 
@@ -103,22 +117,28 @@ export const App: React.FC = () => {
     if (entryMatch) {
       const entryId = entryMatch[1];
       return (
-        <Suspense fallback={<div style={{ padding: '32px', textAlign: 'center', fontFamily: 'serif' }}>Loading entry...</div>}>
-          <LazyEntryEditor
-            entryId={entryId}
-            onNavigateBack={() => window.history.back()}
-            onNavigateToCategory={(catId) => navigate(`/category/${catId}`)}
-          />
-        </Suspense>
+        <ProtectedRoute>
+          <Suspense fallback={<div style={{ padding: '32px', textAlign: 'center', fontFamily: 'serif' }}>Loading entry...</div>}>
+            <LazyEntryEditor
+              entryId={entryId}
+              onNavigateBack={() => window.history.back()}
+              onNavigateToCategory={(catId) => navigate(`/category/${catId}`)}
+            />
+          </Suspense>
+        </ProtectedRoute>
       );
     }
 
     // Default Route: / (Home Screen: Catalogues)
-    return <HomeScreen onNavigateToCategory={(id) => navigate(`/category/${id}`)} />;
+    return (
+      <ProtectedRoute>
+        <HomeScreen onNavigateToCategory={(id) => navigate(`/category/${id}`)} />
+      </ProtectedRoute>
+    );
   };
 
   return (
-    <>
+    <AuthProvider>
       <a href="#main-content" className="skip-link" data-testid="skip-to-content">
         Skip to content
       </a>
@@ -147,12 +167,14 @@ export const App: React.FC = () => {
         </div>
       )}
       {renderContent()}
-      <CommandPalette
-        isOpen={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-        onNavigateToEntry={(id) => navigate(`/entry/${id}`)}
-        onNewEntry={handleCreateNewEntry}
-      />
-    </>
+      {!isLoginPage && (
+        <CommandPalette
+          isOpen={paletteOpen}
+          onClose={() => setPaletteOpen(false)}
+          onNavigateToEntry={(id) => navigate(`/entry/${id}`)}
+          onNewEntry={handleCreateNewEntry}
+        />
+      )}
+    </AuthProvider>
   );
 };

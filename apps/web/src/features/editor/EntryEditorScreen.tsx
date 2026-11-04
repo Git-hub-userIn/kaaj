@@ -50,7 +50,7 @@ import {
 } from './storage/draft-store.js';
 import { ensureFontLoaded } from './font-loader.js';
 import { GlobalBackupStatus } from '../backup/GlobalBackupStatus.js';
-import { API_BASE_URL, AUTH_TOKEN, getAuthToken, getUserId, getWsUrl, getAuthHeaders } from '../../config/api.js';
+import { API_BASE_URL, AUTH_TOKEN, getAuthToken, getUserId, getWsUrl, getAuthHeaders , apiFetch } from '../../config/api.js';
 import { ArrowLeft, AlertCircle, RefreshCw, CheckCircle2, Image as ImageIcon, Cloud, WifiOff, History, ListTree, Link2, Tag, Share2, Maximize2, Minimize2 } from 'lucide-react';
 import { RevisionHistoryDrawer } from './RevisionHistoryDrawer.js';
 import { OutlineSidebar } from './OutlineSidebar.js';
@@ -156,7 +156,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
   useEffect(() => {
     if (!entryId) return;
     let cancelled = false;
-    fetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/tags`, {
+    apiFetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/tags`, {
       headers: getAuthHeaders(),
     })
       .then((res) => (res.ok ? res.json() : []))
@@ -176,7 +176,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
     const name = newTagInput.trim().toLowerCase().replace(/^#/, '');
     if (!name) return;
     try {
-      const res = await fetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/tags`, {
+      const res = await apiFetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/tags`, {
         method: 'POST',
         headers: {
           ...getAuthHeaders(),
@@ -199,7 +199,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
 
   const handleRemoveTag = async (tagId: string) => {
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/tags/${encodeURIComponent(tagId)}`,
         {
           method: 'DELETE',
@@ -240,7 +240,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
 
   const fetchBackupStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/backup/status`, {
+      const res = await apiFetch(`${API_BASE_URL}/backup/status`, {
         headers: { Authorization: AUTH_TOKEN },
       });
       if (res.ok) {
@@ -278,7 +278,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
     setBackupStatus('running');
     setBackupStatusText('Backing up...');
     try {
-      const res = await fetch(`${API_BASE_URL}/backup/trigger`, {
+      const res = await apiFetch(`${API_BASE_URL}/backup/trigger`, {
         method: 'POST',
         headers: { Authorization: AUTH_TOKEN },
       });
@@ -298,7 +298,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
     fetchBackupStatus();
     return () => {
       // Trigger debounced backup snapshot on entry close
-      fetch(`${API_BASE_URL}/backup/trigger`, {
+      apiFetch(`${API_BASE_URL}/backup/trigger`, {
         method: 'POST',
         headers: { Authorization: AUTH_TOKEN },
       }).catch(() => {});
@@ -638,7 +638,7 @@ export const EntryEditorScreen: React.FC<EntryEditorScreenProps> = ({
         const formData = new FormData();
         formData.append('file', file);
 
-        const response = await fetch(`${API_BASE_URL}/assets`, {
+        const response = await apiFetch(`${API_BASE_URL}/assets`, {
           method: 'POST',
           headers: {
             Authorization: AUTH_TOKEN,

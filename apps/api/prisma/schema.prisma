@@ -8,23 +8,39 @@ datasource db {
 }
 
 model User {
-  id               String             @id @default(uuid())
-  email            String             @unique
-  name             String?
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  id                    String             @id @default(uuid())
+  googleSub             String?            @unique
+  email                 String             @unique
+  name                  String?
+  picture               String?
+  encryptedRefreshToken String?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
 
-  categories       Category[]
-  entries          Entry[]
-  manifests        EntryManifest[]
-  chunks           Chunk[]
-  assets           AssetMeta[]
-  maintenanceState MaintenanceState[]
-  leases           JobLease[]
-  revisions        EntryRevision[]
-  tags             Tag[]
-  entryTags        EntryTag[]
-  shareLinks       ShareLink[]
+  sessions              Session[]
+  categories            Category[]
+  entries               Entry[]
+  manifests             EntryManifest[]
+  chunks                Chunk[]
+  assets                AssetMeta[]
+  maintenanceState      MaintenanceState[]
+  leases                JobLease[]
+  revisions             EntryRevision[]
+  tags                  Tag[]
+  entryTags             EntryTag[]
+  shareLinks            ShareLink[]
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model Category {

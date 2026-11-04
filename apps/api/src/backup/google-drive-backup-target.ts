@@ -241,6 +241,12 @@ export class GoogleDriveBackupTarget implements BackupTarget {
 
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
+      if (errText.includes('invalid_grant')) {
+        await fs.unlink(this.config.tokenFilePath).catch(() => {});
+        console.warn(
+          '[Google Drive Target] Stored OAuth token was expired or revoked by Google. Removed stale token file to fall back cleanly.'
+        );
+      }
       throw new Error(`Failed to refresh Google OAuth token (${res.status}): ${errText}`);
     }
 

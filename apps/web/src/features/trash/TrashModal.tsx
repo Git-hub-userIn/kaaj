@@ -5,7 +5,7 @@ import {
   RADIUS_TOKENS,
   SHADOW_TOKENS,
 } from '@kaaj/design';
-import { API_BASE_URL, getAuthHeaders } from '../../config/api.js';
+import { API_BASE_URL, getAuthHeaders , apiFetch } from '../../config/api.js';
 import { Trash2, RotateCcw, X, AlertTriangle } from 'lucide-react';
 
 export interface TrashItem {
@@ -38,7 +38,7 @@ export const TrashModal: React.FC<TrashModalProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/trash`, {
+      const res = await apiFetch(`${API_BASE_URL}/trash`, {
         headers: getAuthHeaders(),
       });
       if (!res.ok) {
@@ -73,7 +73,7 @@ export const TrashModal: React.FC<TrashModalProps> = ({
   const handleRestore = async (id: string) => {
     setActionLoadingId(id);
     try {
-      const res = await fetch(`${API_BASE_URL}/entries/${id}/restore`, {
+      const res = await apiFetch(`${API_BASE_URL}/entries/${id}/restore`, {
         method: 'POST',
         headers: getAuthHeaders(),
       });
@@ -94,7 +94,7 @@ export const TrashModal: React.FC<TrashModalProps> = ({
   const handlePurgeSingle = async (id: string) => {
     setActionLoadingId(id);
     try {
-      const res = await fetch(`${API_BASE_URL}/entries/${id}/purge`, {
+      const res = await apiFetch(`${API_BASE_URL}/entries/${id}/purge`, {
         method: 'DELETE',
         headers: getAuthHeaders(),
       });
@@ -112,7 +112,7 @@ export const TrashModal: React.FC<TrashModalProps> = ({
   const handleEmptyTrash = async () => {
     setEmptying(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/trash/purge?all=true`, {
+      const res = await apiFetch(`${API_BASE_URL}/trash/purge?all=true`, {
         method: 'POST',
         headers: getAuthHeaders(),
       });

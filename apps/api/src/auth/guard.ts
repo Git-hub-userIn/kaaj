@@ -1,5 +1,7 @@
 import type { Context, Next } from 'hono';
-import { ensureUser } from '../db/client.js';
+import { getCookie } from 'hono/cookie';
+import { getBasePrismaClient, ensureUser } from '../db/client.js';
+import { env } from '../config/env.js';
 
 export interface AuthContext {
   userId: string;
@@ -20,7 +22,7 @@ export function checkSharedIpRateLimit(
   windowMs = 60000
 ): { allowed: boolean; remaining: number } {
   const actualLimit =
-    limit ?? ((process.env.NODE_ENV !== 'production' && process.env.APP_MODE === 'test') ? 50 : 60);
+    limit ?? (process.env.NODE_ENV !== 'production' && process.env.APP_MODE === 'test' ? 50 : 60);
   const now = Date.now();
   let entry = sharedIpRateLimitMap.get(ip);
   if (!entry || now > entry.resetAt) {
@@ -47,7 +49,7 @@ export async function sharedIpRateLimitGuard(c: Context, next: Next): Promise<Re
 
 export function checkRateLimit(
   userId: string,
-  limit = (process.env.NODE_ENV !== 'production' && process.env.APP_MODE === 'test') ? 50000 : 300,
+  limit = process.env.NODE_ENV !== 'production' && process.env.APP_MODE === 'test' ? 50000 : 300,
   windowMs = 60000
 ): { allowed: boolean; remaining: number } {
   const now = Date.now();
@@ -63,45 +65,83 @@ export function checkRateLimit(
   return { allowed: true, remaining: limit - entry.count };
 }
 
+/**
+ * Enforce session authentication across protected routes.
+ * Skip public paths and allow test token fallback when APP_MODE is test.
+ */
 export async function authGuard(c: Context, next: Next): Promise<Response | void> {
-  // Routes handled independently (public health, shares, WebSocket auth handler)
-  if (c.req.path === '/health' || c.req.path.startsWith('/shared/') || c.req.path.startsWith('/sync/ws')) {
+  const path = c.req.path;
+
+  // Skip public routes
+  if (
+    path === '/health' ||
+    path.startsWith('/shared/') ||
+    path === '/auth/google' ||
+    path.startsWith('/auth/google/') ||
+    path.startsWith('/sync/ws')
+  ) {
     return await next();
   }
 
-  const isProduction = process.env.NODE_ENV === 'production';
-  const authHeader = c.req.header('Authorization');
-  const queryToken = c.req.query('token');
-  const token = (authHeader ? authHeader.replace(/^Bearer\s+/i, '') : queryToken)?.trim();
-
   let resolvedUserId: string | null = null;
 
-  if (!isProduction && token) {
-    if (token.startsWith('exp:')) {
-      const parts = token.split(':');
-      if (parts.length >= 3) {
-        const expMs = Number(parts[1]);
-        const uid = parts.slice(2).join(':');
-        if (Number.isFinite(expMs) && Date.now() < expMs) {
-          resolvedUserId = uid;
-        }
-      }
-    } else if (token.startsWith('user:')) {
-      resolvedUserId = token.slice(5).trim();
-    } else if (token.startsWith('token-user-')) {
-      resolvedUserId = token.replace('token-', '').trim();
-    } else if (token === DEV_TOKEN || token === 'kaaj-local-dev-token' || token === 'dev-secret-token') {
-      resolvedUserId = 'dev-owner-user';
+  // 1. Validate session cookie
+  const sessionId = getCookie(c, 'kaaj_session');
+  if (sessionId) {
+    const prisma = getBasePrismaClient();
+    const session = await prisma.session.findUnique({
+      where: { id: sessionId },
+    });
+    if (session && session.expiresAt > new Date()) {
+      resolvedUserId = session.userId;
     }
   }
 
-  // Visual assets in non-production allow fallback to dev user when requested without auth headers (e.g. browser <img> tags)
-  if (!resolvedUserId && !isProduction && (c.req.path.startsWith('/assets/') || c.req.path.startsWith('/covers/'))) {
+  // 2. Allow Authorization header fallback in test mode
+  if (!resolvedUserId && process.env.APP_MODE === 'test') {
+    const authHeader = c.req.header('Authorization');
+    if (authHeader) {
+      const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+      if (token.startsWith('exp:')) {
+        const parts = token.split(':');
+        if (parts.length >= 3) {
+          const expMs = Number(parts[1]);
+          const uid = parts.slice(2).join(':');
+          if (Number.isFinite(expMs) && Date.now() < expMs) {
+            resolvedUserId = uid;
+          }
+        }
+      } else if (token.startsWith('user:')) {
+        resolvedUserId = token.slice(5).trim();
+      } else if (token.startsWith('token-user-')) {
+        resolvedUserId = token.replace('token-', '').trim();
+      } else if (
+        token === DEV_TOKEN ||
+        token === 'kaaj-local-dev-token' ||
+        token === 'dev-secret-token'
+      ) {
+        resolvedUserId = 'dev-owner-user';
+      }
+    }
+  }
+
+  // 3. Fallback for visual assets in local development mode
+  if (
+    !resolvedUserId &&
+    process.env.NODE_ENV !== 'production' &&
+    process.env.APP_MODE !== 'test' &&
+    (path.startsWith('/assets/') || path.startsWith('/covers/'))
+  ) {
     resolvedUserId = 'dev-owner-user';
   }
 
   if (!resolvedUserId) {
-    return c.text('Unauthorized', 401);
+    const acceptHeader = c.req.header('Accept') || c.req.header('accept') || '';
+    if (acceptHeader.includes('text/html')) {
+      const frontendUrl = env.FRONTEND_URL.replace(/\/$/, '');
+      return c.redirect(`${frontendUrl}/login`, 302);
+    }
+    return c.json({ error: 'Unauthorized' }, 401);
   }
 
   // Rate limiting check
@@ -113,7 +153,7 @@ export async function authGuard(c: Context, next: Next): Promise<Response | void
   try {
     await ensureUser(resolvedUserId);
   } catch (err: any) {
-    console.error('Failed to ensure user existence in database:', err);
+    console.error('Failed to ensure user in database:', err);
   }
 
   c.set('userId', resolvedUserId);

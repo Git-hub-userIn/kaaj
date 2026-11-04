@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Cloud, RefreshCw, AlertCircle, Sparkles, CheckCircle2, X } from 'lucide-react';
 import { COLOR_TOKENS, TYPOGRAPHY_TOKENS, RADIUS_TOKENS, SPACING_TOKENS } from '@kaaj/design';
-import { API_BASE_URL, AUTH_TOKEN } from '../../config/api';
+import { API_BASE_URL, AUTH_TOKEN, apiFetch } from '../../config/api';
 
 export interface BackupStatusResponse {
   status: 'idle' | 'running' | 'failed';
@@ -24,7 +24,7 @@ export const GlobalBackupStatus: React.FC<{ compact?: boolean }> = ({ compact = 
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/backup/status`, {
+      const res = await apiFetch(`${API_BASE_URL}/backup/status`, {
         headers: { Authorization: AUTH_TOKEN },
       });
       if (res.ok) {
@@ -46,7 +46,7 @@ export const GlobalBackupStatus: React.FC<{ compact?: boolean }> = ({ compact = 
     setIsCleaning(true);
     setCleanMessage(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/backup/prune`, {
+      const res = await apiFetch(`${API_BASE_URL}/backup/prune`, {
         method: 'POST',
         headers: { Authorization: AUTH_TOKEN },
       });
@@ -67,7 +67,7 @@ export const GlobalBackupStatus: React.FC<{ compact?: boolean }> = ({ compact = 
 
   const handleBackupNow = async () => {
     try {
-      await fetch(`${API_BASE_URL}/backup/trigger`, {
+      await apiFetch(`${API_BASE_URL}/backup/trigger`, {
         method: 'POST',
         headers: { Authorization: AUTH_TOKEN },
       });

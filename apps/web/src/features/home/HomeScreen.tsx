@@ -5,7 +5,7 @@ import { HomeHeader } from './HomeHeader.js';
 import { CategoryCollage } from './CategoryCollage.js';
 import { UndoToast } from './UndoToast.js';
 import { OnThisDayWidget } from './OnThisDayWidget.js';
-import { API_BASE_URL, AUTH_TOKEN } from '../../config/api.js';
+import { API_BASE_URL, AUTH_TOKEN , apiFetch } from '../../config/api.js';
 
 interface HomeScreenProps {
   onNavigateToCategory: (id: string) => void;
@@ -19,7 +19,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
 
   const fetchCategories = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/categories`, {
+      const res = await apiFetch(`${API_BASE_URL}/categories`, {
         headers: { Authorization: AUTH_TOKEN },
       });
       if (!res.ok) {
@@ -41,7 +41,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
   }, [fetchCategories]);
 
   const handleAddCategory = async (title: string, coverAssetId?: string) => {
-    const res = await fetch(`${API_BASE_URL}/categories`, {
+    const res = await apiFetch(`${API_BASE_URL}/categories`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -62,7 +62,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
     setRecentlyDeleted(category);
 
     try {
-      await fetch(`${API_BASE_URL}/categories/${category.id}`, {
+      await apiFetch(`${API_BASE_URL}/categories/${category.id}`, {
         method: 'DELETE',
         headers: { Authorization: AUTH_TOKEN },
       });
@@ -83,7 +83,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
     setCategories((prev) => [...prev, catToRestore].sort((a, b) => a.sortOrder - b.sortOrder));
 
     try {
-      await fetch(`${API_BASE_URL}/categories/${catToRestore.id}/restore`, {
+      await apiFetch(`${API_BASE_URL}/categories/${catToRestore.id}/restore`, {
         method: 'POST',
         headers: { Authorization: AUTH_TOKEN },
       });
@@ -98,7 +98,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigateToCategory }) 
     );
 
     try {
-      await fetch(`${API_BASE_URL}/categories/${category.id}`, {
+      await apiFetch(`${API_BASE_URL}/categories/${category.id}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',

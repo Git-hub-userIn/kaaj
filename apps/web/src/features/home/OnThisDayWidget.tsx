@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { COLOR_TOKENS, TYPOGRAPHY_TOKENS, RADIUS_TOKENS, SPACING_TOKENS } from '@kaaj/design';
 import { Sparkles, Calendar, ChevronRight } from 'lucide-react';
-import { API_BASE_URL, getAuthHeaders } from '../../config/api.js';
+import { API_BASE_URL, getAuthHeaders , apiFetch } from '../../config/api.js';
 
 interface OnThisDayEntry {
   id: string;
@@ -15,7 +15,7 @@ export const OnThisDayWidget: React.FC = () => {
   const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE_URL}/entries/on-this-day`, { headers: getAuthHeaders() })
+    apiFetch(`${API_BASE_URL}/entries/on-this-day`, { headers: getAuthHeaders() })
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         setEntries(Array.isArray(data) ? data : []);

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, Link2, ExternalLink } from 'lucide-react';
 import { COLOR_TOKENS, SHADOW_TOKENS } from '@kaaj/design';
-import { API_BASE_URL, getAuthHeaders } from '../../config/api.js';
+import { API_BASE_URL, getAuthHeaders , apiFetch } from '../../config/api.js';
 
 interface BacklinkItem {
   id: string;
@@ -32,7 +32,7 @@ export const BacklinksDrawer: React.FC<BacklinksDrawerProps> = ({
     let cancelled = false;
     setLoading(true);
 
-    fetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/backlinks`, {
+    apiFetch(`${API_BASE_URL}/entries/${encodeURIComponent(entryId)}/backlinks`, {
       headers: getAuthHeaders(),
     })
       .then((res) => {

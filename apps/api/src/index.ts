@@ -19,6 +19,8 @@ import { ImportExportService } from './services/import-export-service.js';
 import { WsSyncService } from './services/ws-sync-service.js';
 import { createBunWebSocket } from 'hono/bun';
 import { authGuard, sharedIpRateLimitGuard } from './auth/guard.js';
+import { authRouter } from './auth/routes.js';
+import { env } from './config/env.js';
 import { BackupService } from './backup/backup-service.js';
 import { LocalFolderBackupTarget } from './backup/local-backup-target.js';
 import { pruneBackups } from './backup/backup-prune.js';
@@ -37,6 +39,9 @@ const app = new Hono();
 app.use('*', cors());
 app.use('/shared/*', sharedIpRateLimitGuard);
 app.use('*', authGuard);
+
+// Authentication endpoints
+app.route('/auth', authRouter);
 
 // Locate repository root reliably
 function findRepoRoot(startDir: string): string {
@@ -1032,41 +1037,6 @@ app.get('/auth/google/url', (c) => {
   return c.json({ url });
 });
 
-app.get('/auth/google/callback', async (c) => {
-  const code = c.req.query('code');
-  if (!code) {
-    return c.text('Missing authorization code.', 400);
-  }
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3001/auth/google/callback';
-
-  if (!clientId || !clientSecret) {
-    return c.text('Google OAuth credentials not configured on server.', 500);
-  }
-
-  try {
-    const tokens = await exchangeCodeForTokens(code, clientId, clientSecret, redirectUri);
-    await googleDriveTarget.saveTokens(tokens);
-    backupService.setTarget(googleDriveTarget);
-    maintenanceService.setTarget(googleDriveTarget);
-    return c.html(`<!DOCTYPE html>
-<html>
-  <head><title>Google Drive Connected</title></head>
-  <body style="font-family: sans-serif; text-align: center; padding: 40px;">
-    <h2>Google Drive Connected Successfully</h2>
-    <p>Your Kaaj entries and visual assets will now automatically back up to Google Drive.</p>
-    <p>You may safely close this window.</p>
-    <script>
-      window.opener?.postMessage('google-auth-success', '*');
-      setTimeout(() => window.close(), 1500);
-    </script>
-  </body>
-</html>`);
-  } catch (err: any) {
-    return c.text(`Google OAuth exchange failed: ${err.message}`, 500);
-  }
-});
 
 app.get('/auth/google/status', (c) => {
   return c.json({

@@ -7,7 +7,7 @@ import {
   type ChunkPayload,
   type TopLevelBlock,
 } from '@kaaj/doc-model';
-import { API_BASE_URL, getAuthToken } from '../../../config/api.js';
+import { API_BASE_URL, getAuthToken , apiFetch } from '../../../config/api.js';
 
 const API_BASE = API_BASE_URL;
 
@@ -38,7 +38,7 @@ export interface SaveResult {
  * Pure storage seam: no other editor code calls the API.
  */
 export async function loadEntryDocument(entryId: string): Promise<LoadedEntry> {
-  const response = await fetch(`${API_BASE}/entries/${entryId}`, {
+  const response = await apiFetch(`${API_BASE}/entries/${entryId}`, {
     headers: {
       Authorization: getAuthToken(),
       Accept: 'application/json',
@@ -96,7 +96,7 @@ export async function saveEntryDocument(
     'If-Match': `"${expectedVersion}"`,
   };
 
-  const response = await fetch(`${API_BASE}/entries/${entryId}`, {
+  const response = await apiFetch(`${API_BASE}/entries/${entryId}`, {
     method: 'PUT',
     headers,
     body: JSON.stringify({ doc, title }),
@@ -154,7 +154,7 @@ export async function saveEntryDocument(
  * Loads entry chunk manifest.
  */
 export async function loadEntryManifest(entryId: string): Promise<EntryManifest | null> {
-  const response = await fetch(`${API_BASE}/entries/${entryId}/manifest`, {
+  const response = await apiFetch(`${API_BASE}/entries/${entryId}/manifest`, {
     headers: {
       Authorization: getAuthToken(),
       Accept: 'application/json',
@@ -173,7 +173,7 @@ export async function loadEntryManifest(entryId: string): Promise<EntryManifest 
  * Loads a single chunk payload.
  */
 export async function loadEntryChunk(entryId: string, chunkId: string): Promise<ChunkPayload | null> {
-  const response = await fetch(`${API_BASE}/entries/${entryId}/chunks/${chunkId}`, {
+  const response = await apiFetch(`${API_BASE}/entries/${entryId}/chunks/${chunkId}`, {
     headers: {
       Authorization: getAuthToken(),
       Accept: 'application/json',
@@ -203,7 +203,7 @@ export async function saveEntryChunk(
     'If-Match': `"${expectedVersion}"`,
   };
 
-  const response = await fetch(`${API_BASE}/entries/${entryId}/chunks/${chunkId}`, {
+  const response = await apiFetch(`${API_BASE}/entries/${entryId}/chunks/${chunkId}`, {
     method: 'PUT',
     headers,
     body: JSON.stringify({ blocks }),

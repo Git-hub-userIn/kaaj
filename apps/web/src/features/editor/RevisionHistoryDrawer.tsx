@@ -5,7 +5,7 @@ import {
   RADIUS_TOKENS,
   SHADOW_TOKENS,
 } from '@kaaj/design';
-import { API_BASE_URL, getAuthHeaders } from '../../config/api.js';
+import { API_BASE_URL, getAuthHeaders , apiFetch } from '../../config/api.js';
 import { X, History, RotateCcw, Clock, FileText } from 'lucide-react';
 
 export interface RevisionSummary {
@@ -48,7 +48,7 @@ export const RevisionHistoryDrawer: React.FC<RevisionHistoryDrawerProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/entries/${entryId}/revisions`, {
+      const res = await apiFetch(`${API_BASE_URL}/entries/${entryId}/revisions`, {
         headers: getAuthHeaders(),
       });
       if (!res.ok) {
@@ -74,7 +74,7 @@ export const RevisionHistoryDrawer: React.FC<RevisionHistoryDrawerProps> = ({
     async function loadPreview() {
       setLoadingPreview(true);
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${API_BASE_URL}/entries/${entryId}/revisions/${selectedVersion}`,
           {
             headers: getAuthHeaders(),
@@ -122,7 +122,7 @@ export const RevisionHistoryDrawer: React.FC<RevisionHistoryDrawerProps> = ({
     if (selectedVersion === null || !entryId || restoring) return;
     setRestoring(true);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_BASE_URL}/entries/${entryId}/revisions/${selectedVersion}/restore`,
         {
           method: 'POST',

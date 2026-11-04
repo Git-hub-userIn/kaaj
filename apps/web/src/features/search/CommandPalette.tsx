@@ -6,7 +6,7 @@ import {
   SHADOW_TOKENS,
 } from '@kaaj/design';
 import { Search, FileText, Plus, X, CornerDownLeft } from 'lucide-react';
-import { API_BASE_URL, getAuthHeaders } from '../../config/api.js';
+import { API_BASE_URL, getAuthHeaders , apiFetch } from '../../config/api.js';
 
 export interface SearchResultItem {
   id: string;
@@ -60,7 +60,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     setIsLoading(true);
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/search?q=${encodeURIComponent(clean)}`, {
+        const res = await apiFetch(`${API_BASE_URL}/search?q=${encodeURIComponent(clean)}`, {
           headers: getAuthHeaders(),
         });
         if (res.ok) {

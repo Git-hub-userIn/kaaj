@@ -21,7 +21,7 @@ import {
 import type { Category, CategoryLightRow, EntryLightRow, SpineStyle, CategoryStats } from '@kaaj/doc-model';
 import { getPileLabel, computePileGeometries } from './stack-utils.js';
 import { RiAddLine, RiArrowLeftLine, RiAlertLine } from '@remixicon/react';
-import { API_BASE_URL, AUTH_TOKEN } from '../../config/api.js';
+import { API_BASE_URL, AUTH_TOKEN, apiFetch } from '../../config/api.js';
 
 interface CategoryStackScreenProps {
   categoryId: string;
@@ -131,10 +131,10 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
       const headers = { Authorization: AUTH_TOKEN };
 
       const [catRes, entriesRes, allCatsRes, statsRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/categories/${categoryId}`, { headers }),
-        fetch(`${API_BASE_URL}/categories/${categoryId}/entries`, { headers }),
-        fetch(`${API_BASE_URL}/categories`, { headers }),
-        fetch(`${API_BASE_URL}/categories/${categoryId}/stats`, { headers }),
+        apiFetch(`${API_BASE_URL}/categories/${categoryId}`, { headers }),
+        apiFetch(`${API_BASE_URL}/categories/${categoryId}/entries`, { headers }),
+        apiFetch(`${API_BASE_URL}/categories`, { headers }),
+        apiFetch(`${API_BASE_URL}/categories/${categoryId}/stats`, { headers }),
       ]);
 
       if (!catRes.ok) {
@@ -177,7 +177,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     async (updates: Partial<Category>): Promise<boolean> => {
       if (!category) return false;
       try {
-        const res = await fetch(`${API_BASE_URL}/categories/${category.id}`, {
+        const res = await apiFetch(`${API_BASE_URL}/categories/${category.id}`, {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',
@@ -256,7 +256,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
   // Create new entry
   const handleCreateEntry = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/entries`, {
+      const res = await apiFetch(`${API_BASE_URL}/entries`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -284,7 +284,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     );
 
     try {
-      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
+      await apiFetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -302,7 +302,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     setEntries((prev) => prev.filter((e) => e.id !== entryId));
 
     try {
-      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
+      await apiFetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -322,7 +322,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     );
 
     try {
-      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
+      await apiFetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -345,7 +345,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     );
 
     try {
-      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
+      await apiFetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -369,7 +369,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     );
 
     try {
-      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
+      await apiFetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -391,7 +391,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     setDeletedEntry({ id: target.id, title: target.title });
 
     try {
-      await fetch(`${API_BASE_URL}/entries/${entryId}`, {
+      await apiFetch(`${API_BASE_URL}/entries/${entryId}`, {
         method: 'DELETE',
         headers: { Authorization: AUTH_TOKEN },
       });
@@ -407,7 +407,7 @@ export const CategoryStackScreen: React.FC<CategoryStackScreenProps> = ({
     setDeletedEntry(null);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/entries/${toRestore.id}/restore`, {
+      const res = await apiFetch(`${API_BASE_URL}/entries/${toRestore.id}/restore`, {
         method: 'POST',
         headers: { Authorization: AUTH_TOKEN },
       });

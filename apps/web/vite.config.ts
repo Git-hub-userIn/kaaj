@@ -17,6 +17,10 @@ export default defineConfig({
       allow: [searchForWorkspaceRoot(process.cwd())],
     },
     proxy: {
+      '/auth': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,

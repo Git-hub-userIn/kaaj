@@ -101,8 +101,8 @@ export function getDbPool(connectionString?: string): pg.Pool {
   return pool;
 }
 
-// Base PrismaClient stays private to this db module
-function getBasePrismaClient(connectionString?: string): PrismaClient {
+// Base PrismaClient for system-level operations (auth sessions, shared links)
+export function getBasePrismaClient(connectionString?: string): PrismaClient {
   const connStr = connectionString || resolveDatabaseUrl();
   if (prismaInstance && currentPrismaUrl === connStr && !connectionString) {
     return prismaInstance;

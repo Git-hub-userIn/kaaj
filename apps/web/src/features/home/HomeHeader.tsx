@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { COLOR_TOKENS, TYPOGRAPHY_TOKENS, SPACING_TOKENS, RADIUS_TOKENS, CURRENT_USER } from '@kaaj/design';
-import { Search, Trash2, Sun, Moon, BookOpen } from 'lucide-react';
+import { Search, Trash2, Sun, Moon, BookOpen, LogOut } from 'lucide-react';
 import { GlobalBackupStatus } from '../backup/GlobalBackupStatus';
 import { TrashModal } from '../trash/TrashModal.js';
-import { API_BASE_URL, getAuthHeaders } from '../../config/api.js';
+import { API_BASE_URL, getAuthHeaders , apiFetch } from '../../config/api.js';
+import { useAuth } from '../auth/AuthContext.js';
 
 export const HomeHeader: React.FC = () => {
+  const { user, logout } = useAuth();
   const [trashOpen, setTrashOpen] = useState(false);
   const [isDark, setIsDark] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -31,9 +33,10 @@ export const HomeHeader: React.FC = () => {
 
   const handleDailyJournal = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/entries/daily-template`, {
+      const res = await apiFetch(`${API_BASE_URL}/entries/daily-template`, {
         method: 'POST',
         headers: getAuthHeaders(),
+        credentials: 'include',
       });
       if (res.ok) {
         const data = await res.json();
@@ -44,6 +47,24 @@ export const HomeHeader: React.FC = () => {
       console.error('Failed to create daily journal:', err);
     }
   };
+
+  const userInitials = useMemo(() => {
+    if (user?.name) {
+      const parts = user.name.trim().split(/\s+/).filter(Boolean);
+      if (parts.length >= 2) {
+        return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+      }
+      if (parts.length === 1 && parts[0].length > 0) {
+        return parts[0].slice(0, 2).toUpperCase();
+      }
+    }
+    if (user?.email) {
+      return user.email.slice(0, 2).toUpperCase();
+    }
+    return CURRENT_USER.initials;
+  }, [user]);
+
+  const userName = user?.name || user?.email || CURRENT_USER.name;
 
   return (
     <header
@@ -211,7 +232,7 @@ export const HomeHeader: React.FC = () => {
         <div
           data-testid="user-avatar"
           role="img"
-          aria-label={`User profile: ${CURRENT_USER.name} (${CURRENT_USER.initials})`}
+          aria-label={`User profile: ${userName} (${userInitials})`}
           tabIndex={0}
           style={{
             width: '38px',
@@ -230,10 +251,46 @@ export const HomeHeader: React.FC = () => {
             boxShadow: '0 1px 3px rgba(45, 35, 25, 0.08)',
             cursor: 'default',
             userSelect: 'none',
+            overflow: 'hidden',
           }}
         >
-          {CURRENT_USER.initials}
+          {user?.picture ? (
+            <img
+              src={user.picture}
+              alt={userName}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                borderRadius: RADIUS_TOKENS.full,
+              }}
+            />
+          ) : (
+            <span>{userInitials}</span>
+          )}
         </div>
+
+        {/* Sign Out Button */}
+        <button
+          type="button"
+          data-testid="sign-out-btn"
+          onClick={logout}
+          aria-label="Sign out"
+          title="Sign out"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '6px',
+            backgroundColor: COLOR_TOKENS.paperWarm,
+            border: `1px solid ${COLOR_TOKENS.border}`,
+            borderRadius: RADIUS_TOKENS.sm,
+            color: COLOR_TOKENS.inkMuted,
+            cursor: 'pointer',
+          }}
+        >
+          <LogOut size={15} aria-hidden="true" />
+        </button>
       </div>
 
       <TrashModal
